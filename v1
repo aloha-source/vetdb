@@ -1,7 +1,24 @@
 -- ============================================
 -- VetDB: initial creation (tables plural, columns singular)
 -- ============================================
+/＊
+下記は、これまでの合意を合成した VetDB の新規作成 SQL 全文（DROPなし）です。
+	•	他DB名は farmDB（相手側）に統一した前提のコメント・命名にしています。
+	•	テーブル名は複数形／カラム名は単数形。
+	•	VetDB 側の 自元帳（SoT） と mirror（farmDB写し） を併置。
+	•	双方向連携用に entity_links、通知キューに outbox / inbox_notifications を用意。
+	•	バージョン管理用に schema_versions と 追加用プロシージャ を付与し、初期レコードを vetDBtable_v1 で登録します。
+使い方メモ（超要約）
+	•	自元帳（編集可）：farms / individuals / farm_users / visits / checkups / checkup_items / receipts / receipt_lines / treatment_master
+	•	mirror（閲覧専用）：farms_mirror / individuals_mirror / farm_users_mirror（いずれも farmDB のスナップショット）
+	•	対応付け：entity_links(entity_type, local_uuid, remote_uuid)
+	•	通知：outbox（VetDB→farmDB）、inbox_notifications（farmDB→VetDB）
+	•	バージョン管理：今後スキーマ更新時は
+	•	変更DDLを流した後に CALL bump_schema_version('vetDBtable_v2', '…変更内容…'); を追加
+	•	バージョン番号はあなたの合図で上げます（今回は v1 で登録）
 
+このままベースにして、次は row_hash の正規化ルール や receipt確定SQL（visit→receipt_linesコピー）、同期payloadの標準スキーマ も用意できます。どこから進めますか？
+＊/
 -- USE `your_vetdb`;
 SET NAMES utf8mb4 COLLATE utf8mb4_general_ci;
 
