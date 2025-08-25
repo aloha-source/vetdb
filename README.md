@@ -1,9 +1,12 @@
 # vetdb
 DBスキーマと簡易アプリ一式。
 
-**現在の正**: `versions/ddl_v1.sql`（タグ: `v1`） 
-※ 次版を確定したらここを `ddl_v2.sql`（タグ `v2`）に更新。軽微な変更は`ddl_v1.1.sql`となる
-
+- **現在の正**: `versions/v1.0.0.sql`（タグ: `v1.0.0`） 
+※ 次版を確定したらここを `v2.0.0.sql`（タグ `v2.0.0`）に更新。
+バージョン変更はSemVerによる
+	•	MAJOR（例: 2.0.0）… 互換破壊：列削除／型縮小／NOT NULL 追加／主キー変更 など
+	•	MINOR（例: 1.1.0）… 互換維持で機能追加：列追加（NULL可/既定値あり）、新テーブル、ビュー、インデックス追加 など
+	•	PATCH（例: 1.1.1）… 互換維持の修正：コメント修正、インデックス名修正、デフォルト値の誤り修正 など
 ---
 
 ## 1. なにが入っている？
@@ -45,3 +48,39 @@ DBスキーマと簡易アプリ一式。
 /ddl            ← 分割DDLが欲しいとき（任意）
   composer.json   ← （必要なら）PSR-4オートロード用
   .gitignore
+---
+
+## 2. 使い方（DB）
+
+### 新規インストール
+- ローカルファイルから:  
+  `mysql -u <user> -p <database> < versions/v1.sql`
+- GitHub の固定URL（タグ）から読みたい場合:  
+  `https://raw.githubusercontent.com/<ユーザー>/<リポジトリ>/<タグ>/versions/v1.sql`
+
+### アップグレード
+`migrations/` のファイルを順番に適用（例: `v1_to_v1p2.sql` → `v1p2_to_v1p3.sql` …）。
+
+---
+
+## 3. 開発フロー（迷わない最小ルール）
+1. ブランチ作成: `patch/<topic>`（例: `patch/v1p2-add-qty-unit`）
+2. 変更 → コミット（スマホのWeb編集＝即コミットでOK）
+3. **Pull Request** 作成（未完成なら **Draft PR**）
+4. テスト/確認 → **Squash and merge** で main に取り込み
+5. **タグ付け**（Releases → *Draft a new release* → `v1p2` など）
+6. README の **現在の正** を更新、`CHANGELOG.md` に要約を書く
+
+> 長期保守が必要になった時だけ `release/v1` のような保守ブランチを作成。ふだんは **main＋タグ** で十分。
+
+---
+
+## 4. 命名と方針（例）
+- テーブル名: **複数形**（`individuals`, `checkup_items`）  
+- カラム名: **単数形**（`name`, `qty_unit`）  
+- 外部キー・インデックスは依存順で定義／最後に制約をまとめてもOK  
+- スキーマ版は `schema_versions` で管理（任意）
+
+---
+
+## 5. ChatGPT への依頼テンプレ
