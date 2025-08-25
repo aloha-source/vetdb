@@ -1,6 +1,13 @@
 # vetdb
 DBスキーマと簡易アプリ一式。
+# vetdb
+**正（Canonical）**: tag `v1.1.0`
 
+**Artifacts (under tag `v1.1.0`)**
+- DB install: `versions/install.sql`
+  https://raw.githubusercontent.com/<user>/<repo>/v1.1.0/versions/install.sql
+- Migrate from 1.0.0: `migrations/1.0.0_to_1.1.0.sql`
+- App entry: `/public/index.php`
 - **現在の正**: `versions/1.0.0.sql`（タグ: `v1.0.0`） 
 ※ 次版を確定したらここを `2.0.0.sql`（タグ `v2.0.0`）に更新。
 バージョン変更はSemVerによる
