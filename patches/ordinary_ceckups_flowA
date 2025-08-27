@@ -1,0 +1,100 @@
+了解です。A/Bを統合し、Receipt は常に「Visit セレクタ」から開始（1件でも複数件でも同じUI）にします。Visit作成直後も、このセレクタに新規Visitを自動選択して遷移します。
+
+日常フロー（確定）
+	1.	ダッシュボード → 個体検索
+	2.	Visit未割当のまま checkup 作成／編集／複製（複数個体OK）
+	3.	Visitビルド（未割当checkupを横断選択→1つのVisitを作成）
+	4.	Visitセレクタ（Receipt起点・単複同一UI）
+	•	新規Visit作成直後は、ここに遷移してそのVisitをプリセレクト
+	•	既存Visitからの発行も同じ画面
+	5.	Receiptプレビュー → 確定（finalize）→ 印刷
+
+⸻
+
+Visitセレクタ（Receipt起点・単複同一UI）
+	•	入口：メインメニュー「Receipt」／個体ダッシュ「Visit一覧」／Visitビルド完了後の自動遷移
+	•	一覧：Visit行（未発行優先 → 直近順）
+	•	列例：日時、checkup件数（Ready/全体）、概算合計、未割当検知バッジ
+	•	行頭チェックボックスで1件でも複数件でも選択
+	•	右ペイン：選択中Visitのサマリ（Visit別小計・総計、保険/自由内訳、税、合計）
+	•	CTA：「次へ（checkup選択）」
+	•	付帯機能：
+	•	検索/フィルタ（期間・担当・未発行）
+	•	新規Visit作成直後は自動スクロール＆プリセレクト＋トースト表示
+	•	未割当checkupが残っていれば「未割当をVisitに割り当てる」導線を表示
+
+⸻
+
+checkup選択（選んだ Visit の中身をまとめて）
+	•	構造：Visit ＞ 個体 ＞ checkup の3階層で表示
+	•	既定：Readyのみ選択済み（draftはバナー警告＋「全てReadyにする」クイック操作）
+	•	まとめ操作：Visit単位の「全選択/解除」、個体単位の一括ON/OFF
+	•	バリデーション表示：
+	•	保険行あり×加入スナップなし
+	•	転帰あり×終診日なし
+	•	claim_month / fiscal_year の混在検出 →
+	•	①1枚にまとめる（混在明記）
+	•	②請求月ごとに自動分割（推奨設定）
+	•	CTA：「プレビュー」
+
+⸻
+
+プレビュー → 確定・印刷
+	•	表示：行レベル計算の総和（行ごとに税→Visit別→総計）、保険/自由内訳、丸めは clinic_settings に準拠
+	•	確定：
+	•	選択 checkup を finalized
+	•	各 checkup について chart_checkups / chart_items をスナップ（病名ヘッダ・加入スナップ・単価/税/丸め・yen_per_point を当時値で固定）
+	•	出力：1枚の領収書（Visitセクション見出し→個体→checkup順）／請求書／カルテPDF
+
+⸻
+
+Visitビルダー（未割当→Visit作成）
+	•	未割当checkup（個体横断）一覧から複数選択→Visit作成
+	•	入力：visit_at（今 or 選択範囲から自動提案）、メモ
+	•	実行：選択 checkup の visit_uuid を新規Visitに一括付与（finalizedは除外）
+	•	完了後：Visitセレクタへ遷移＆新規Visitをプリセレクト（A/B統合の要）
+
+⸻
+
+状態・制約
+	•	checkups.status：draft → ready → finalized（Receipt確定で遷移）
+	•	Visit：1 Visit に複数個体／同一個体の複数checkupを許容
+	•	Receipt：Visitセレクタから1件でも複数でも選択発行（個体は混在可）
+	•	カルテヘッダ（chart）：個体軸で独立（未接続一覧→後付け作成/追記）。Visitとは非依存
+
+⸻
+
+バリデーション要点
+	•	draft混在 → 既定は不可（設定で許可可／許可時も自動Ready化は避け、明示操作）
+	•	保険行×加入スナップなし → 警告＋続行可否を選択
+	•	転帰あり×終診日なし → 警告
+	•	claim_month/fiscal_year 混在 → 自動分割オプション提示
+
+⸻
+
+実装メモ（最小変更で可）
+	•	Visit作成後の遷移先を固定：Visitセレクタ（新規Visitをプリセレクト）
+	•	エンドポイント例：
+	•	GET /visits?unbilled=true&from=...&to=...（セレクタ用）
+	•	POST /visits { checkup_uuids[], visit_at, note }（ビルダー）
+	•	POST /receipts { visit_uuids[], checkup_uuids[] }（チェックアップは省略時=Ready全選択などのルール化可）
+	•	インデックス：
+	•	idx_checkups_unassigned (status, created_at)
+	•	idx_checkups_visit (visit_uuid, created_at)
+	•	idx_checkups_visit_individual (visit_uuid, individual_uuid, created_at)
+	•	DDL注意：(visit_uuid, individual_uuid) の UNIQUE は置かない（同一個体の複数checkup許容）
+
+⸻
+
+UX細部
+	•	ショートカット：Alt+L=Visitセレクタ、Alt+A=全Visit選択/解除、Alt+C=checkup全選択、Alt+P=プレビュー、Alt+Enter=確定
+	•	セレクタは固定フッターに「選択Visit数／checkup数／総額」を表示
+	•	新規Visitプリセレクト時はトースト＋行ハイライトで気づきやすく
+
+⸻
+
+chart連携（参考）
+	•	checkup編集時、openなヘッダがあれば「追記しますか？」（任意）
+	•	カルテ編集画面は別系統（個体ごとに接続/解除・インライン編集）で従来通り
+
+この統合で、「1件発行」も「複数件まとめて発行」も同じ動線・同じUIで運用できます。必要なら、Visitセレクタとcheckup選択のワイヤーフレーム案も出します。
