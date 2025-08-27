@@ -1,1 +1,238 @@
+/* =========================================================
+   p6 → p012 統合 追加DDL（新規インストール用 / ALTER不要）
+   対象: disease_master / chart_headers / chart_checkups / chart_items(+uuid) / checkup_items
+   前提:
+     - visits / individuals / checkups は p012（uuid BINARY(16)）で既存
+     - uuid_v7_bin(), uuid_hex_to_bin(), uuid_bin_to_hex() は導入済み
+   ポイント:
+     - 文字コード: utf8mb4 / utf8mb4_unicode_ci
+     - UUID: BINARY(16) 統一、必要テーブルは v7 自動採番トリガ
+     - chart_items に uuid を新設し、トリガを追加（今回の変更点）
+   ========================================================= */
 
+SET NAMES utf8mb4;
+
+-- 再デプロイ安全化（トリガ→子→親の順でDROP）
+DROP TRIGGER IF EXISTS tr_chart_headers_bi_uuid_v7;
+DROP TRIGGER IF EXISTS tr_chart_checkups_bi_uuid_v7;
+DROP TRIGGER IF EXISTS tr_chart_items_bi_uuid_v7;
+DROP TRIGGER IF EXISTS tr_checkup_items_bi_uuid_v7;
+
+DROP TABLE IF EXISTS chart_items;
+DROP TABLE IF EXISTS chart_checkups;
+DROP TABLE IF EXISTS checkup_items;
+DROP TABLE IF EXISTS chart_headers;
+DROP TABLE IF EXISTS disease_master;
+
+-- 1) disease_master（バイナリ化＋p012 charset/collate）
+CREATE TABLE IF NOT EXISTS disease_master (
+  id    INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  uuid  BINARY(16) NOT NULL UNIQUE,                 -- バイナリUUID
+  code  VARCHAR(32) NOT NULL UNIQUE,                -- ※6桁固定化は別パッチ
+  name  VARCHAR(255) NOT NULL,
+  INDEX idx_disease_master_name (name)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 2) chart_headers（p6→p012統合DDL＋disease FK有効化）
+CREATE TABLE IF NOT EXISTS chart_headers (
+  id                       INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  uuid                     BINARY(16) NOT NULL UNIQUE,
+
+  individual_uuid          BINARY(16) NOT NULL,            -- ↔ individuals.uuid
+  farm_uuid                BINARY(16) NOT NULL,            -- ↔ farms.uuid
+  insurance_enrollment_id  INT UNSIGNED NULL,              -- ↔ insurance_enrollments.id
+
+  fiscal_year              YEAR NOT NULL,
+  claim_month              TINYINT UNSIGNED NOT NULL,      -- 1-12
+
+  outcome_code             TINYINT UNSIGNED NOT NULL,      -- 1治癒/2死亡/3法令殺/4廃用/5中止
+  onset_date               DATE NULL,
+  first_visit_date         DATE NULL,
+  last_visit_date          DATE NULL,
+  outcome_date             DATE NULL,
+  visit_count              INT UNSIGNED NOT NULL DEFAULT 0,
+
+  chief_complaint          VARCHAR(255) NULL,
+  diagnosis_text           VARCHAR(255) NULL,
+
+  disease1_code            VARCHAR(32)  NULL,
+  disease1_name            VARCHAR(255) NULL,
+  disease2_code            VARCHAR(32)  NULL,
+  disease2_name            VARCHAR(255) NULL,
+  disease3_code            VARCHAR(32)  NULL,
+  disease3_name            VARCHAR(255) NULL,
+
+  total_b_points           INT UNSIGNED NOT NULL DEFAULT 0,
+  total_a_points           INT UNSIGNED NOT NULL DEFAULT 0,
+  total_price_yen          INT UNSIGNED NOT NULL DEFAULT 0,
+  subtotal_yen             INT UNSIGNED NOT NULL DEFAULT 0,
+  patient_copay_yen        INT UNSIGNED NOT NULL DEFAULT 0,
+  insurer_pay_yen          INT UNSIGNED NOT NULL DEFAULT 0,
+  tax_yen                  INT UNSIGNED NOT NULL DEFAULT 0,
+
+  status ENUM('draft','closed','issued','voided') NOT NULL DEFAULT 'draft',
+  closed_at                DATETIME NULL,
+  issued_at                DATETIME NULL,
+  printed_at               DATETIME NULL,
+  printed_count            INT UNSIGNED NOT NULL DEFAULT 0,
+
+  -- farms スナップ
+  farm_name                VARCHAR(255) NULL,
+  farm_address             VARCHAR(255) NULL,
+  farm_insurance_number    VARCHAR(64)  NULL,
+
+  -- individuals スナップ
+  animal_name              VARCHAR(255) NULL,
+  ear_tag                  VARCHAR(32)  NULL,
+  dam_name                 VARCHAR(255) NULL,
+  dam_ear_tag              VARCHAR(32)  NULL,
+  breed_code               VARCHAR(32)  NULL,
+  kyosai_purpose_code      VARCHAR(32)  NULL,
+
+  clinic_snapshot_json     JSON NULL,
+
+  -- insurance_enrollments スナップ
+  ins_farm_user_id         INT UNSIGNED NULL,
+  ins_subscriber_code      CHAR(8) NULL,
+  ins_status               ENUM('加入','非加入','不明','下書き') NULL,
+  ins_start_date           DATE NULL,
+  ins_end_date             DATE NULL,
+  ins_fiscal_year          YEAR NULL,
+  ins_source_note          VARCHAR(255) NULL,
+
+  created_by               INT UNSIGNED NULL,
+  deleted_at               DATETIME NULL,
+  created_at               DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at               DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+  INDEX idx_chart_headers_period     (fiscal_year, claim_month),
+  INDEX idx_chart_headers_status     (status),
+  INDEX idx_chart_headers_individual (individual_uuid),
+  INDEX idx_chart_headers_farm       (farm_uuid),
+  INDEX idx_chart_headers_outcome    (outcome_code),
+  INDEX idx_chart_headers_dis1       (disease1_code),
+  INDEX idx_chart_headers_dis2       (disease2_code),
+  INDEX idx_chart_headers_dis3       (disease3_code),
+
+  CONSTRAINT fk_ch_hdr_individual
+    FOREIGN KEY (individual_uuid) REFERENCES individuals(uuid)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_ch_hdr_farm
+    FOREIGN KEY (farm_uuid) REFERENCES farms(uuid)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_ch_hdr_ins
+    FOREIGN KEY (insurance_enrollment_id) REFERENCES insurance_enrollments(id)
+    ON UPDATE CASCADE ON DELETE SET NULL,
+
+  -- disease_master(code) 参照（スナップ整合チェック）
+  CONSTRAINT fk_ch_hdr_dis1
+    FOREIGN KEY (disease1_code) REFERENCES disease_master(code)
+    ON UPDATE CASCADE ON DELETE SET NULL,
+  CONSTRAINT fk_ch_hdr_dis2
+    FOREIGN KEY (disease2_code) REFERENCES disease_master(code)
+    ON UPDATE CASCADE ON DELETE SET NULL,
+  CONSTRAINT fk_ch_hdr_dis3
+    FOREIGN KEY (disease3_code) REFERENCES disease_master(code)
+    ON UPDATE CASCADE ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+DELIMITER $$
+CREATE TRIGGER tr_chart_headers_bi_uuid_v7
+BEFORE INSERT ON chart_headers
+FOR EACH ROW
+BEGIN
+  IF NEW.uuid IS NULL OR LENGTH(NEW.uuid) = 0 THEN
+    SET NEW.uuid = uuid_v7_bin();
+  END IF;
+END $$
+DELIMITER ;
+
+-- 3) chart_checkups（p012準拠、FKはBINARY(16)で再作成）
+CREATE TABLE IF NOT EXISTS chart_checkups (
+  id                   INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  uuid                 BINARY(16) NOT NULL UNIQUE,      -- スナップ行のUUID
+  chart_uuid           BINARY(16) NOT NULL,             -- ↔ chart_headers.uuid
+  seq_no               INT UNSIGNED NOT NULL,           -- ヘッダ内の並び
+
+  source_checkup_uuid  BINARY(16) NOT NULL,             -- 元 checkups.uuid（監査）
+  source_visit_uuid    BINARY(16) NULL,                 -- 元 visits.uuid（任意）
+
+  checkup_at           DATETIME NULL,                   -- 受診日時
+
+  subjective_text      TEXT NULL,
+  objective_text       TEXT NULL,
+  assessment_text      TEXT NULL,
+  plan_text            TEXT NULL,
+  clinical_course_text TEXT NULL,
+  tpr_temp_c           DECIMAL(4,1) NULL,
+  tpr_pulse_bpm        SMALLINT UNSIGNED NULL,
+  tpr_resp_bpm         SMALLINT UNSIGNED NULL,
+
+  created_at           DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+  UNIQUE KEY uq_chart_checkups_hdr_seq (chart_uuid, seq_no),
+  INDEX idx_chart_checkups_hdr (chart_uuid),
+
+  CONSTRAINT fk_chart_checkups_header
+    FOREIGN KEY (chart_uuid) REFERENCES chart_headers(uuid)
+    ON UPDATE CASCADE ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+DELIMITER $$
+CREATE TRIGGER tr_chart_checkups_bi_uuid_v7
+BEFORE INSERT ON chart_checkups
+FOR EACH ROW
+BEGIN
+  IF NEW.uuid IS NULL OR LENGTH(NEW.uuid) = 0 THEN
+    SET NEW.uuid = uuid_v7_bin();
+  END IF;
+END $$
+DELIMITER ;
+
+-- 4) chart_items（uuid を新設し、トリガ追加 ← 今回の変更点）
+CREATE TABLE IF NOT EXISTS chart_items (
+  id                     INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  uuid                   BINARY(16) NOT NULL UNIQUE,     -- ★ 新設: スナップ明細のUUID
+  chart_checkup_uuid     BINARY(16) NOT NULL,            -- ↔ chart_checkups.uuid（親）
+  within_checkup_line_no INT UNSIGNED NOT NULL,          -- 受診回内の行順
+
+  source_checkup_uuid    BINARY(16) NOT NULL,            -- 由来（監査用／checkups.uuid）
+  treatment_uuid         BINARY(16) NULL,                -- 任意参照（treatment_master.uuid 等）
+
+  description            VARCHAR(255) NOT NULL,
+
+  qty_unit               VARCHAR(32) NULL,
+  quantity               DECIMAL(10,2) NOT NULL DEFAULT 1,
+
+  pay_type               ENUM('insurance','private') NOT NULL,
+
+  unit_b_points          INT UNSIGNED NOT NULL DEFAULT 0,
+  unit_a_points          INT UNSIGNED NOT NULL DEFAULT 0,
+  subtotal_points        INT UNSIGNED NOT NULL DEFAULT 0,
+  yen_per_point          DECIMAL(8,2) NOT NULL DEFAULT 0.00,
+
+  unit_price_yen         INT UNSIGNED NOT NULL DEFAULT 0,
+  subtotal_price_yen     INT UNSIGNED NOT NULL DEFAULT 0,
+
+  tax_rate               DECIMAL(4,2) NOT NULL DEFAULT 0.00,
+  subtotal_yen           INT UNSIGNED NOT NULL DEFAULT 0,
+
+  created_at             DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+  INDEX idx_chart_items_parent (chart_checkup_uuid, within_checkup_line_no),
+
+  CONSTRAINT fk_chart_items_cc
+    FOREIGN KEY (chart_checkup_uuid) REFERENCES chart_checkups(uuid)
+    ON UPDATE CASCADE ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+DELIMITER $$
+CREATE TRIGGER tr_chart_items_bi_uuid_v7
+BEFORE INSERT ON chart_items
+FOR EACH ROW
+BEGIN
+  IF NEW.uuid IS NULL OR LENGTH(NEW.uuid) = 0 THEN
+    SET NEW.uuid = uuid_v7_bin();
+  END IF;
+END $$
+DELIMITER ;
