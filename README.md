@@ -122,3 +122,52 @@ ChatGPT への依頼テンプレ
 注意
 	•	現在の正＝/versions の最大番号というルールを厳守してください。
 	•	固定参照点が必要な場合は、コミット SHA を README/CHANGELOG に併記すると再現が容易です（タグ運用をしない前提）。
+
+
+erDiagram
+    FARMS ||--o{ INDIVIDUALS : "farm_uuid (FK)"
+    USERS ||--o{ INDIVIDUALS : "user_uuid (FK)"
+    INDIVIDUALS ||--o{ INDIVIDUALS : "genetic_dam_uuid（母→子, SET NULL）"
+    INDIVIDUALS ||--o{ INDIVIDUALS : "nursing_dam_uuid（母→子, SET NULL）"
+    FARMS ||--o{ VISITS : "farm_uuid（論理参照/現状FKなし）"
+    VISITS ||--o{ CHECKUPS : "visit_uuid (FK)"
+    INDIVIDUALS ||--o{ CHECKUPS : "individual_uuid (FK)"
+    CHECKUPS ||--o{ CHECKUP_ITEMS : "checkup_uuid (FK)"
+
+    FARMS {
+      string uuid PK
+    }
+    USERS {
+      string uuid PK
+    }
+    INDIVIDUALS {
+      int    id PK
+      string uuid
+      string farm_uuid FK
+      string user_uuid FK
+      string ear_tag
+      string gender
+      date   birth_date
+      date   death_date
+      string genetic_dam_uuid FK
+      string nursing_dam_uuid FK
+      bigint row_version
+      datetime deleted_at
+    }
+    VISITS {
+      string uuid PK
+      string farm_uuid
+    }
+    CHECKUPS {
+      int    id PK
+      string uuid
+      string visit_uuid FK
+      string individual_uuid FK
+      bigint row_version
+      datetime deleted_at
+    }
+    CHECKUP_ITEMS {
+      int    id PK
+      string uuid
+      string checkup_uuid FK
+    }
