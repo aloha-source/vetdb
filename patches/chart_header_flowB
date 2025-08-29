@@ -2,8 +2,8 @@ flow-ChartHeader（カルテヘッダ作成フロー／アンカーロック付�
 
 0) 目的・前提
 	•	目的：未接続checkupから、同一個体だけを束ねてカルテヘッダを新規作成 or 既存openカルテへ追記する。
-	•	前提：checkups.status ∈ {draft, ready} のみ対象。finalizedは一覧に出さない／接続不可。
-
+	•	前提：廃止:checkups.status ∈ {draft, ready} のみ対象。finalizedは一覧に出さない／接続不可。
+　　　　　　→　保険診療がひとつもないcheckupは表示するしないを選べる
 ⸻
 
 1) 入口：未接続checkup一覧
@@ -42,7 +42,7 @@ flow-ChartHeader（カルテヘッダ作成フロー／アンカーロック付�
 
 ⸻
 
-5) 分岐B：新規ヘッダ作成（ウィザード）
+5) 分岐B：新規ヘッダ作成
 
 Step A：ヘッダ基本情報
 	•	個体（アンカー固定／編集不可）
