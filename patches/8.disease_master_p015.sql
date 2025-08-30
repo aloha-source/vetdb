@@ -38,3 +38,30 @@ CREATE TABLE IF NOT EXISTS disease_master (
   INDEX idx_disease_name  (is_active, middle_name, minor_name),
   INDEX idx_quality       (deleted_at, updated_at, id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+DROP TABLE IF EXISTS disease_rinkoku_rules;
+CREATE TABLE IF NOT EXISTS disease_rinkoku_rules (
+  id            INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  uuid          CHAR(36)     NOT NULL UNIQUE,
+
+  -- 対象の病名（#8）
+  disease_id    INT UNSIGNED NOT NULL,               -- ↔ disease_master(id)
+
+  -- 凛告候補（申告理由の短文）
+  rinkoku_text  VARCHAR(128) NOT NULL,               -- 例: '無発情', '下痢', '元気なし'
+
+  -- 表示順（小さいほど上）
+  display_order SMALLINT UNSIGNED NOT NULL DEFAULT 100,
+
+  -- 運用最小限
+  is_active     TINYINT(1)   NOT NULL DEFAULT 1,
+  created_at    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+  -- 索引・制約
+  INDEX idx_drr_fetch (disease_id, is_active, display_order, id),
+  CONSTRAINT fk_drr_disease
+    FOREIGN KEY (disease_id) REFERENCES disease_master(id)
+    ON UPDATE CASCADE ON DELETE RESTRICT
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
