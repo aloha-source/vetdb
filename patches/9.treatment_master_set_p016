@@ -1,0 +1,91 @@
+DROP TABLE IF EXISTS treatment_master;
+CREATE TABLE IF NOT EXISTS treatment_master (
+  id                INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  uuid              CHAR(36) NOT NULL UNIQUE,
+
+  code              VARCHAR(50)  NULL,
+  name              VARCHAR(255) NOT NULL,
+  type              ENUM('procedure','medication') NOT NULL,
+  qty_unit          VARCHAR(50) NOT NULL,
+
+  default_pay_type  ENUM('insurance','private') NOT NULL DEFAULT 'insurance',
+
+  -- 病名に依存せず使用可能な処置のためのフラグ／注意
+  allow_without_disease TINYINT(1) NOT NULL DEFAULT 0,
+  global_advice         VARCHAR(500) NULL,
+
+  -- 価格・点数（現行）
+  current_b_points  DECIMAL(10,2) NULL,
+  current_a_points  DECIMAL(10,2) NULL,
+  current_price_yen DECIMAL(10,2) NULL,
+
+  -- 税率（一本化）
+  tax_rate          DECIMAL(5,4)  NOT NULL,   -- 例: 0.1000
+
+  -- 任意メタ
+  dosage_per_kg     DECIMAL(10,4) NULL,
+  usage_text        TEXT NULL,
+
+  is_active         TINYINT(1) NOT NULL DEFAULT 1,
+
+  created_at        DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at        DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  deleted_at        DATETIME NULL,
+  row_version       BIGINT UNSIGNED NOT NULL DEFAULT 1,
+
+  UNIQUE KEY uq_treatment_master_code (code),
+  INDEX idx_treatment_master_active (is_active, name),
+  INDEX idx_treatment_master_quality (deleted_at, updated_at, id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+DROP TABLE IF EXISTS treatment_disease_rules;
+CREATE TABLE IF NOT EXISTS treatment_disease_rules (
+  id            INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  treatment_id  INT UNSIGNED NOT NULL,   -- ↔ treatment_master.id
+  disease_id    INT UNSIGNED NOT NULL,   -- ↔ disease_master.id（A案: code6 一意）
+  advice_text   VARCHAR(500) NULL,       -- on-label のときだけ表示（任意）
+
+  created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+  UNIQUE KEY uq_tdr_pair (treatment_id, disease_id),
+  INDEX idx_tdr_treat (treatment_id),
+  INDEX idx_tdr_dis   (disease_id),
+
+  CONSTRAINT fk_tdr_treat FOREIGN KEY (treatment_id)
+    REFERENCES treatment_master(id)
+    ON UPDATE RESTRICT ON DELETE RESTRICT,
+  CONSTRAINT fk_tdr_dis FOREIGN KEY (disease_id)
+    REFERENCES disease_master(id)
+    ON UPDATE RESTRICT ON DELETE RESTRICT
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+ /* 以下は判定sql。ddlと違うかもしれないのでコメントアウト
+ SET @OFFLABEL_MSG := 'この処置はルール未登録です。';
+
+WITH hdr AS (  -- ヘッダ病名ID（NULL除外）
+  SELECT :d1_id AS disease_id FROM DUAL WHERE :d1_id IS NOT NULL
+  UNION ALL SELECT :d2_id FROM DUAL WHERE :d2_id IS NOT NULL
+  UNION ALL SELECT :d3_id FROM DUAL WHERE :d3_id IS NOT NULL
+),
+match_rule AS (  -- on-label の一致を1件だけ拾う
+  SELECT r.advice_text
+  FROM treatment_disease_rules r
+  JOIN hdr h ON h.disease_id = r.disease_id
+  WHERE r.treatment_id = :treatment_id
+  LIMIT 1
+),
+tm AS (  -- 処置のグローバル許可設定
+  SELECT allow_without_disease, global_advice
+  FROM treatment_master WHERE id = :treatment_id
+),
+has_hdr AS (SELECT COUNT(*) AS cnt FROM hdr)
+SELECT
+  CASE
+    WHEN (SELECT cnt FROM has_hdr)=0 THEN NULL
+    WHEN EXISTS(SELECT 1 FROM match_rule)
+         THEN NULLIF((SELECT advice_text FROM match_rule), '')        -- on-label: adviceが空→非表示
+    WHEN (SELECT allow_without_disease FROM tm)=1
+         THEN NULLIF((SELECT global_advice FROM tm), '')              -- グローバル許可：注意があれば表示
+    ELSE @OFFLABEL_MSG                                                -- off-label：固定文
+  END AS display_text; */
