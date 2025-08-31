@@ -89,3 +89,50 @@ SELECT
          THEN NULLIF((SELECT global_advice FROM tm), '')              -- グローバル許可：注意があれば表示
     ELSE @OFFLABEL_MSG                                                -- off-label：固定文
   END AS display_text; */
+
+
+-- セット本体（所有者＝獣医）
+CREATE TABLE IF NOT EXISTS treatment_sets (
+  id            INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  user_id       INT UNSIGNED NOT NULL,            -- 所有獣医
+  name          VARCHAR(100) NOT NULL,
+  note          VARCHAR(255) NULL,                -- セット全体のメモ
+  sequence_no   INT UNSIGNED NOT NULL DEFAULT 1,  -- セット一覧の並び順
+  visibility    ENUM('private','shared') NOT NULL DEFAULT 'shared',
+  is_active     TINYINT(1) NOT NULL DEFAULT 1,
+
+  created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  deleted_at    DATETIME NULL,
+
+  CONSTRAINT fk_treatment_sets_user
+    FOREIGN KEY (user_id) REFERENCES users(id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+
+  INDEX idx_user (user_id, is_active, sequence_no),
+  INDEX idx_visibility (visibility)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- セット内アイテム
+CREATE TABLE IF NOT EXISTS treatment_set_items (
+  id               INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  set_id           INT UNSIGNED NOT NULL,
+  treatment_id     INT UNSIGNED NOT NULL,          -- treatment_master.id (v1p2)
+  sequence_no      INT UNSIGNED NOT NULL DEFAULT 1,
+  preset_quantity  DECIMAL(10,3) NULL,             -- あれば最優先で使用（固定量）
+
+  created_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  deleted_at       DATETIME NULL,
+
+  CONSTRAINT fk_ts_items_set
+    FOREIGN KEY (set_id) REFERENCES treatment_sets(id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_ts_items_treatment
+    FOREIGN KEY (treatment_id) REFERENCES treatment_master(id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+
+  INDEX idx_set_seq (set_id, sequence_no),
+  INDEX idx_treatment (treatment_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
