@@ -326,13 +326,7 @@ CREATE TABLE IF NOT EXISTS chart_headers (
   created_at                DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at                DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
 
-  /* 疾病コードのみ最小限の参照整合性 */
-  CONSTRAINT fk_ch_dis1 FOREIGN KEY (disease1_code) REFERENCES disease_master(code6)
-    ON UPDATE CASCADE ON DELETE SET NULL,
-  CONSTRAINT fk_ch_dis2 FOREIGN KEY (disease2_code) REFERENCES disease_master(code6)
-    ON UPDATE CASCADE ON DELETE SET NULL,
-  CONSTRAINT fk_ch_dis3 FOREIGN KEY (disease3_code) REFERENCES disease_master(code6)
-    ON UPDATE CASCADE ON DELETE SET NULL,
+  /* 疾病コードのみ最小限の参照整合性は不要のため削除 */
 
   /* インデックス（p013 の意図を踏襲） */
   INDEX idx_chart_headers_period      (fiscal_year, claim_month),
