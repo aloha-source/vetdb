@@ -106,30 +106,6 @@ END$$
 DELIMITER ;
 
 /* ================================================================
-   farms: 非加入既定フラグを追加（ALTER）
-   ------------------------------------------------
-   - 非加入の牧場は常に自費（UI固定／APIも強制）。
-   - DBは IF NOT EXISTS を利用（対応版MySQL/MariaDB想定）。
-   - 既に存在する場合はスキップ。
-   ================================================================ */
-ALTER TABLE farms
-  ADD COLUMN IF NOT EXISTS non_insured TINYINT(1) NOT NULL DEFAULT 0;
--- 既存環境での重複作成を避けるため、インデックス作成は必要に応じて実行
--- CREATE INDEX idx_farms_non_insured ON farms(non_insured);
-
-/* ================================================================
-   receipt_header_drafts（p017の最小スタブ）
-   ------------------------------------------------
-   - checkups.receipt_header_drafts_uuid の FK 受け皿
-   - 本番では p017 正式DDL（列/索引/トリガ）に差し替え
-   ================================================================ */
-CREATE TABLE receipt_header_drafts (
-  id   INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-  uuid BINARY(16) NOT NULL UNIQUE,
-  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci ROW_FORMAT=DYNAMIC;
-
-/* ================================================================
    individuals（p014.3 構成踏襲）
    ------------------------------------------------
    - UUID: BINARY(16) / v7想定（自動採番トリガ）
