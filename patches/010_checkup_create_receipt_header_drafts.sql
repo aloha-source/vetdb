@@ -4,6 +4,7 @@
 -- @requires:
 
 DROP TABLE IF EXISTS receipt_header_drafts;
+
 CREATE TABLE receipt_header_drafts (
   id   INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   uuid BINARY(16) NOT NULL UNIQUE,
