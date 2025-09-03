@@ -1,0 +1,29 @@
+違いますテーブルリストは以下の番号で管理しています。
+
+了解です。検証対象のテーブル一覧（1〜22）です。
+	1.	individuals
+	2.	visits
+	3.	checkups
+	4.	checkup_items
+	5.	chart_headers
+	6.	chart_checkups
+	7.	chart_items
+	8.	disease_master（任意）
+	9.	treatment_master
+	10.	treatment_sets
+	11.	treatment_set_items
+	12.	clinic_settings
+	13.	insurance_enrollments
+	14.	appointments
+	15.	appointment_event_links
+	16.	appointment_fulfillments
+	17.	vet_google_tokens
+	18.	vet_calendar_prefs
+	19.	vet_calendar_sync_state
+	20.	users
+	21.	outbox_messages
+	22.	inbox_processed
+23
+24
+のうち、v1boxに入っているものはどれですか？
+

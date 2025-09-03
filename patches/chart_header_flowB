@@ -1,0 +1,137 @@
+flow-ChartHeader（カルテヘッダ作成フロー／アンカーロック付き）
+
+0) 目的・前提
+	•	目的：未接続checkupから、同一個体だけを束ねてカルテヘッダを新規作成 or 既存openカルテへ追記する。
+	•	前提：廃止:checkups.status ∈ {draft, ready} のみ対象。finalizedは一覧に出さない／接続不可。
+　　　　　　→　保険診療がひとつもないcheckupは表示するしないを選べる
+⸻
+
+1) 入口：未接続checkup一覧
+	•	メニュー：「未接続checkup」
+	•	取得条件：chart_header_uuid IS NULL AND status IN ('draft','ready')
+	•	表示列：日付時刻｜個体（耳標/名前）｜主訴要約｜Ready｜Visit有無｜概算金額
+	•	操作：行チェックで選択開始（この瞬間にアンカーロック発動）
+
+⸻
+
+2) アンカーロック（最初の1件選択時）
+	1.	初回選択行の individual_uuid を anchor_individual_uuid として確定。
+	2.	一覧をその個体で即時フィルタ（他個体はDOMから消える＝選択不可能）。
+	3.	画面上部にロックチップ表示：
+	•	個体固定：耳標 123456 / 花子　[固定解除]
+	4.	openカルテ自動探索（非同期）
+	•	見つかったら：バー表示「openカルテ：『○○』 → [このカルテに追記] [新規ヘッダ作成]」
+	•	無ければ：「openカルテはありません → [新規ヘッダ作成]」
+
+ロック解除条件：選択全解除、または「固定解除」クリック。解除で一覧は全体に戻る。
+
+⸻
+
+3) 複数選択ルール（同一個体のみ）
+	•	同一個体の未接続checkupを複数選択可。右側に選択サマリ（件数／Ready件数／概算）。
+	•	異個体は視界に出さないため誤選択不可。
+	•	URL直叩き等で別個体UUIDを指定された場合は警告表示＋無視（サーバ側も検証で弾く）。
+
+⸻
+
+4) 分岐A：既存openカルテに追記
+	•	案内バーの「このカルテに追記」で実行ダイアログへ：
+	•	対象カルテ要約（タイトル／作成日／病名1〜3）
+	•	追加checkup一覧
+	•	「接続」→ 成功後、カルテ編集画面へ遷移
+
+⸻
+
+5) 分岐B：新規ヘッダ作成
+
+Step A：ヘッダ基本情報
+	•	個体（アンカー固定／編集不可）
+	•	タイトル（任意）
+	•	病名1〜3（コード＋名称）
+	•	発病日／初診日（初期＝選択checkupの最小日）／終診日／転帰（任意）
+	•	claim_month／fiscal_year（空なら自動補完）
+	•	備考
+	•	右側：加入スナップの確認
+
+Step B：接続確認
+	•	追加するcheckup一覧（日時・主訴・Ready）
+	•	オプション：「今後この個体の新規checkup作成時、本カルテへの追記を既定にする」
+
+Step C：作成
+	•	INSERT chart_headers(status='open', ...) → UPDATE checkups SET chart_header_uuid=:new_header WHERE uuid IN (:uuids)
+	•	成功後、カルテ編集画面へ
+
+⸻
+
+6) カルテ編集画面（ヘッダ）
+	•	上段：ヘッダ情報（病名1〜3／日付群／claim_month・fiscal_year／備考／status=open）
+	•	中段：接続済checkup一覧（日時・Visit・S/O/A/P要約・TPR要約・items概算・Ready）
+	•	行クリックでインライン編集（モーダル/スライドイン）
+	•	「追加」＝同一個体限定の未接続checkupモーダル
+	•	「解除」＝接続解除（未接続に戻す／Visit割当は保持）
+	•	下段：保存（自動保存なし）
+	•	closed への遷移はReceipt側の運用ポリシーに合わせて自動/手動を選択可
+
+⸻
+
+7) バリデーション／防御（UI＋サーバ二重化）
+
+UI側
+	•	アンカーで一覧を物理的に絞り込み、異個体は表示しない
+	•	固定解除時は確認ダイアログ（選択がクリアされる旨）
+
+サーバ側（必須）
+	•	既存ヘッダ追記：
+	1.	SELECT individual_uuid FROM chart_headers WHERE uuid=:header → h_ind
+	2.	COUNT(*) 検証：checkups.uuid IN (:uuids) がすべて individual_uuid=h_ind かつ chart_header_uuid IS NULL かつ status IN ('draft','ready')
+	3.	不一致なら 409 Conflict
+	•	新規作成：COUNT(DISTINCT individual_uuid) が 1 であること、既接続/ finalized でないことを検証
+
+⸻
+
+8) API/SQL（簡略例）
+	•	未接続一覧：GET /checkups?chart_connected=false&status=draft,ready&from=...&to=...
+	•	open検索：GET /chart-headers?individual_uuid=:id&status=open&limit=1
+	•	追記：PATCH /checkups/chart-header { header_uuid, checkup_uuids[] }
+	•	新規：POST /chart-headers { individual_uuid, title, diseases[], onset_date, first_visit_date, ..., attach_checkup_uuids[] }
+
+（サーバ側トランザクション例）
+
+START TRANSACTION;
+-- 追記
+SELECT individual_uuid INTO @h_ind FROM chart_headers WHERE uuid=:header_uuid FOR UPDATE;
+SELECT COUNT(*) INTO @ok
+  FROM checkups
+ WHERE uuid IN (:uuids)
+   AND individual_uuid=@h_ind
+   AND chart_header_uuid IS NULL
+   AND status IN ('draft','ready')
+ FOR UPDATE;
+IF @ok <> :uuids_len THEN
+  ROLLBACK; SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='MIXED_INDIVIDUALS_OR_INVALID';
+END IF;
+UPDATE checkups SET chart_header_uuid=:header_uuid WHERE uuid IN (:uuids);
+COMMIT;
+
+
+⸻
+
+9) インデックス／実装メモ
+	•	idx_checkups_chartnull (individual_uuid, chart_header_uuid, created_at)（未接続抽出）
+	•	idx_chart_headers_open (individual_uuid, status, created_at)（open探索）
+	•	画面状態：
+	•	anchor_individual_uuid（ロック中の個体）
+	•	selected_checkup_uuids[]（常に同一個体）
+	•	ショートカット例：
+	•	Alt+O＝openへ追記／Alt+N＝新規ヘッダ／Alt+F＝固定解除／Alt+S＝保存
+
+⸻
+
+10) 文言（例）
+	•	固定バー：個体を固定しています：耳標 123456 / 花子　[固定解除]
+	•	異個体選択試行：このカルテには別個体を追加できません。固定を解除してから選び直してください。
+	•	固定解除確認：選択中のチェックアップが解除されます。固定を解除しますか？
+
+⸻
+
+以上が、アンカーロック込みの flow-ChartHeader の全体像です。必要であれば、画面ワイヤー（一覧→固定バー→追記/新規→ヘッダ編集）も作成します。
