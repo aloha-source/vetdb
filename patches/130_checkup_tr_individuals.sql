@@ -1,10 +1,9 @@
-/* 130_checkup_tr_individuals.sql */
+/* 130_checkup_tr_individuals_bi_uuid_v7.sql */
 -- @phase: trigger
--- @provides: trigger:tr_individuals_bi_uuid_v7, trigger:tr_individuals_bu_rowver
+-- @provides: trigger:tr_individuals_bi_uuid_v7
 -- @requires: table:individuals, function:uuid_v7_bin, table:farms
 
 DROP TRIGGER IF EXISTS tr_individuals_bi_uuid_v7;
-DROP TRIGGER IF EXISTS tr_individuals_bu_rowver;
 DROP TRIGGER IF EXISTS tr_individuals_bi_clinic;
 
 DELIMITER $$
@@ -22,14 +21,6 @@ BEGIN
     SELECT f.clinic_uuid INTO @cu FROM farms f WHERE f.uuid = NEW.farm_uuid LIMIT 1;
     SET NEW.clinic_uuid = @cu;
   END IF;
-END$$
-
-CREATE TRIGGER tr_individuals_bu_rowver
-BEFORE UPDATE ON individuals
-FOR EACH ROW
-BEGIN
-  /* 履歴固定方針のため clinic_uuid は自動更新しない（必要時はアプリで明示更新） */
-  SET NEW.row_version = OLD.row_version + 1;
 END$$
 
 DELIMITER ;
