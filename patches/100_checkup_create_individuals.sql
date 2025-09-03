@@ -3,13 +3,8 @@
 -- @provides: table:individuals
 -- @requires: table:clinics, table:farms, table:users, function:uuid_v7_bin
 
-DROP VIEW IF EXISTS individuals_hex_v;
-
-DROP TRIGGER IF EXISTS tr_individuals_bi_uuid_v7;
-DROP TRIGGER IF EXISTS tr_individuals_bu_rowver;
-DROP TRIGGER IF EXISTS tr_individuals_bi_clinic;
-
 DROP TABLE IF EXISTS individuals;
+
 CREATE TABLE individuals (
   id                    INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   uuid                  BINARY(16) NOT NULL UNIQUE,
@@ -32,5 +27,7 @@ CREATE TABLE individuals (
   created_at            DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at            DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   deleted_at            DATETIME NULL,
-  row_version           BIGINT UNSIGNED NOT NULL DEFAULT 1
+  row_version           BIGINT UNSIGNED NOT NULL DEFAULT 1,
+  CONSTRAINT chk_individuals_no_self_genetic CHECK (genetic_dam_uuid IS NULL OR genetic_dam_uuid <> uuid),
+  CONSTRAINT chk_individuals_no_self_nursing CHECK (nursing_dam_uuid IS NULL OR nursing_dam_uuid <> uuid)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci ROW_FORMAT=DYNAMIC;
