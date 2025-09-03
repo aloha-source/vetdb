@@ -1,10 +1,9 @@
-/* 430_checkup_tr_checkup_items.sql */
+/* 430_checkup_tr_checkup_items_bi_uuid_v7.sql */
 -- @phase: trigger
--- @provides: trigger:tr_checkup_items_bi_uuid_v7, trigger:tr_checkup_items_bu_rowver
+-- @provides: trigger:tr_checkup_items_bi_uuid_v7
 -- @requires: table:checkup_items, function:uuid_v7_bin, table:checkups
 
 DROP TRIGGER IF EXISTS tr_checkup_items_bi_uuid_v7;
-DROP TRIGGER IF EXISTS tr_checkup_items_bu_rowver;
 DROP TRIGGER IF EXISTS tr_checkup_items_bi_clinic;
 
 DELIMITER $$
@@ -22,13 +21,6 @@ BEGIN
     SELECT c.clinic_uuid INTO @cu FROM checkups c WHERE c.uuid = NEW.checkup_uuid LIMIT 1;
     SET NEW.clinic_uuid = @cu;
   END IF;
-END$$
-
-CREATE TRIGGER tr_checkup_items_bu_rowver
-BEFORE UPDATE ON checkup_items
-FOR EACH ROW
-BEGIN
-  SET NEW.row_version = OLD.row_version + 1;
 END$$
 
 DELIMITER ;
