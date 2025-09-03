@@ -3,6 +3,8 @@
 -- @provides: function:uuid_bin_to_hex, function:uuid_hex_to_bin, function:uuid_v7_str, function:uuid_v7_bin
 -- @requires:
 
+SET NAMES utf8mb4;
+
 DELIMITER $$
 
 DROP FUNCTION IF EXISTS uuid_bin_to_hex $$
