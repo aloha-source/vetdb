@@ -1,7 +1,7 @@
 # scripts/gen_readme_scan.py
 import os, pathlib, datetime
 
-ROOT = pathlib.Path("schema"), pathlib.Path("patches")
+ROOT = pathlib.Path("schema")
 OUT = pathlib.Path("README.md")
 
 def classify(path: pathlib.Path):
