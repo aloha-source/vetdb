@@ -6,7 +6,8 @@
 > 例: `versions/1.1.0.sql` と `versions/1.2.0.sql` があれば、**`1.2.0.sql`** が現在の正。  
 > 命名は **SemVer**（`MAJOR.MINOR.PATCH.sql` 例: `1.2.0.sql`）で統一してください。  
 > ※ `1.10.0` と `1.9.0` の比較誤りを防ぐため **3桁の形式**を推奨します。
-
+dbは（MariaDB 10.5）を使用します。
+lalavelでpwa-dbをつくります。
 ---
 
 ## ディレクトリ構成（wip ブランチのルート `/`）
@@ -122,6 +123,37 @@ ChatGPT への依頼テンプレ
 注意
 	•	現在の正＝/versions の最大番号というルールを厳守してください。
 	•	固定参照点が必要な場合は、コミット SHA を README/CHANGELOG に併記すると再現が容易です（タグ運用をしない前提）。
+
+/* ============================================================
+  checkups — BINARY(16) 版（MariaDB 10.5）／クライアント32桁hex・API境界のみ変換
+
+  ■方針
+    - クライアント（PWA）は UUID を **32桁hex（小文字、ダッシュ無し）** で扱う。
+    - APIでは受信時に **UNHEX(…)=BINARY(16)** へ、返却時は **LOWER(HEX(…))** へ変換。
+    - DBはすべて **BINARY(16)** で保存し、JOIN/索引/容量を最適化。
+    - UUID未指定（クライアント発番できない）時は、**DBトリガが v7 を自動付与**。
+    - GUIの可読用途は **ビュー** で提供（本体テーブルはクリーンを維持）。
+
+  ■カラム/外部キー
+    - `uuid` / `visit_uuid` / `individual_uuid` / `chart_header_uuid` は **BINARY(16)**。
+    - `visits` / `individuals` / `chart_headers` 側の `uuid` も **BINARY(16) + UNIQUE** 前提。
+    - （旧コメント）訪問のFK名は要望どおり **fk_visit_uuid1**。
+    - （修正）FK命名規則に合わせ **fk_checkups_visit_uuid** に統一。
+
+  ■文字コード（整合性）
+    - 本テーブルは **DEFAULT CHARSET = utf8mb4, COLLATE = utf8mb4_unicode_ci** を明示。
+    - アプリ内の他テーブルも **同一** に統一（混在は JOIN/比較で不具合の元）。
+      例: ALTER DATABASE your_db CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+  ■API境界の使い方（例）
+    - 受信: 32桁hex → `UNHEX(:uuid_hex)` で渡す（未指定なら NULL）
+    - 返却: `SELECT LOWER(HEX(uuid)) AS uuid_hex ...`
+
+  ■備考
+    - レプリケーションは、関数で RAND() を使うため **ROWベース**推奨。
+    - 親行はすでに存在していること（**親→子の順でINSERT**）。
+=============================================
+=======
 
 
 erDiagram
