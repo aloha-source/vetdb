@@ -1,10 +1,9 @@
-/* 330_checkup_tr_checkups.sql */
+/* 330_checkup_tr_checkups_bi_uuid_v7.sql */
 -- @phase: trigger
--- @provides: trigger:tr_checkups_bi_uuid_v7, trigger:tr_checkups_bu_rowver
+-- @provides: trigger:tr_checkups_bi_uuid_v7
 -- @requires: table:checkups, function:uuid_v7_bin, table:visits, table:individuals
 
 DROP TRIGGER IF EXISTS tr_checkups_bi_uuid_v7;
-DROP TRIGGER IF EXISTS tr_checkups_bu_rowver;
 
 DELIMITER $$
 
@@ -25,13 +24,6 @@ BEGIN
     END IF;
     SET NEW.clinic_uuid = @cu;
   END IF;
-END$$
-
-CREATE TRIGGER tr_checkups_bu_rowver
-BEFORE UPDATE ON checkups
-FOR EACH ROW
-BEGIN
-  SET NEW.row_version = OLD.row_version + 1;
 END$$
 
 DELIMITER ;
