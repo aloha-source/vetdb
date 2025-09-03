@@ -1,10 +1,9 @@
-/* 230_checkup_tr_visits.sql */
+/* 230_checkup_tr_visits_bi_uuid.sql */
 -- @phase: trigger
--- @provides: trigger:bi_visits_uuid, trigger:bu_visits_rowver
+-- @provides: trigger:bi_visits_uuid
 -- @requires: table:visits, function:uuid_v7_bin, table:farms
 
 DROP TRIGGER IF EXISTS bi_visits_uuid;
-DROP TRIGGER IF EXISTS bu_visits_rowver;
 DROP TRIGGER IF EXISTS tr_visits_bi_clinic;
 
 DELIMITER $$
@@ -25,13 +24,6 @@ BEGIN
     SELECT f.clinic_uuid INTO @cu FROM farms f WHERE f.uuid = NEW.farm_uuid LIMIT 1;
     SET NEW.clinic_uuid = @cu;
   END IF;
-END$$
-
-CREATE TRIGGER bu_visits_rowver
-BEFORE UPDATE ON visits
-FOR EACH ROW
-BEGIN
-  SET NEW.row_version = OLD.row_version + 1;
 END$$
 
 DELIMITER ;
