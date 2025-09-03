@@ -5,12 +5,15 @@ from collections import defaultdict
 ROOT = pathlib.Path("patches")
 OUT  = pathlib.Path("README.md")
 
-FILE_RE = re.compile(r"^(\d+)_([a-z0-9]+)_(.+)\.sql$", re.IGNORECASE)
+# 先頭番号は3桁でも4桁でもOK（= 最低3桁以上）
+FILE_RE = re.compile(r"^(\d{3,4})_([a-z0-9]+)_(.+)\.sql$", re.IGNORECASE)
 
 def parse_file(p: pathlib.Path):
     m = FILE_RE.match(p.name)
     if not m:
-        return (99999999, "misc", p.stem)  # 規則外は最後にまとめる
+        # 規則外は最後にまとめる
+        return (99999999, "misc", p.stem)
+    # 数値部分は整数化 → 出力時にゼロ埋め4桁に統一
     num = int(m.group(1))
     feature = m.group(2)
     rest = m.group(3)
@@ -19,10 +22,11 @@ def parse_file(p: pathlib.Path):
 files = [p for p in ROOT.glob("*.sql")]
 parsed = [(p, *parse_file(p)) for p in files]
 
-# install順ソート
+# install順ソート（番号順 → 機能 → 名前）
 parsed_sorted = sorted(parsed, key=lambda x: (x[1], x[2]))
 
-def md_link(p): return f"[{p.name}]({p.as_posix()})"
+def md_link(p):
+    return f"[{p.name}]({p.as_posix()})"
 
 lines = []
 lines += [
@@ -37,8 +41,9 @@ lines += [
     "| # | 機能 | ファイル |",
     "|---:|:---|:---|",
 ]
+# 番号は常に4桁ゼロ埋め
 for p, num, feat, rest in sorted(parsed, key=lambda x: x[1]):
-    lines.append(f"| {num:03d} | {feat} | {md_link(p)} |")
+    lines.append(f"| {num:04d} | {feat} | {md_link(p)} |")
 
 lines += ["", "## 機能別索引", ""]
 by_feature = defaultdict(list)
@@ -48,7 +53,7 @@ for p, num, feat, rest in parsed:
 for feat in sorted(by_feature.keys()):
     lines.append(f"### {feat}")
     for num, p in sorted(by_feature[feat], key=lambda x: x[0]):
-        lines.append(f"- {num:03d}: {md_link(p)}")
+        lines.append(f"- {num:04d}: {md_link(p)}")
     lines.append("")
 
 OUT.write_text("\n".join(lines) + "\n", encoding="utf-8")
