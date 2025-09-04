@@ -1,4 +1,4 @@
-/* 2008_receipt_tr_tr_receipt_header_drafts_bu_rowver.sql */
+/* 2008_receipt_tr_receipt_header_drafts_bu_rowver.sql */
 -- @phase: trigger
 -- @feature: receipt
 -- @provides: trigger:tr_receipt_header_drafts_bu_rowver
