@@ -1,4 +1,4 @@
-/* 2007_receipt_tr_tr_receipt_header_drafts_bi_uuid_v7.sql */
+/* 2007_receipt_tr_receipt_header_drafts_bi_uuid_v7.sql */
 -- @phase: trigger
 -- @feature: receipt
 -- @provides: trigger:tr_receipt_header_drafts_bi_uuid_v7
