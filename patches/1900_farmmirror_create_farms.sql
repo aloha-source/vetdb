@@ -4,7 +4,7 @@
 -- @requires: table:clinics, function:uuid_v7_bin
 -- 備考: 索引/UNIQUE/FK/トリガは別ファイルへ分離（本文は原文の列定義を維持）
 
-SET NAMES utf8mb4;
+--SET NAMES utf8mb4;はinitに分離
 
 DROP TABLE IF EXISTS farms;
 CREATE TABLE farms (
