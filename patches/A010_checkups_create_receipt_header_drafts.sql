@@ -1,4 +1,4 @@
-/* 010_checkup_create_receipt_header_drafts.sql */
+/* checkups分割時に混入したスタブのためアーカイブ。010_checkup_create_receipt_header_drafts.sql */
 -- @phase: create
 -- @provides: table:receipt_header_drafts
 -- @requires:
