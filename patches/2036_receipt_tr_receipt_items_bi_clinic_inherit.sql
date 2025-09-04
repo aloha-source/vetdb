@@ -1,4 +1,4 @@
-/* 2036_receipt_tr_tr_receipt_items_bi_clinic_inherit.sql */
+/* 2036_receipt_tr_receipt_items_bi_clinic_inherit.sql */
 -- @phase: trigger
 -- @feature: receipt
 -- @provides: trigger:tr_receipt_items_bi_clinic_inherit
