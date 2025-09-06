@@ -26,8 +26,9 @@ def main():
                 endpath = pathlib.Path(m2.group(1))
                 if cur_path is None or endpath.as_posix() != cur_path.as_posix():
                     raise RuntimeError(f"Marker mismatch: {endpath} vs {cur_path}")
+                content = "".join(buf)
                 cur_path.parent.mkdir(parents=True, exist_ok=True)
-                cur_path.write_text("".join(buf), encoding="utf-8")
+                cur_path.write_text(content, encoding="utf-8")
                 wrote.append(cur_path.as_posix())
                 cur_path = None
                 buf = []
