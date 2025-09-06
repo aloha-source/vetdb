@@ -1,0 +1,536 @@
+# AI_BUNDLE v1
+# root=patches
+<<<FILE patches/1900_farmmirror_create_farms.sql>>>
+/* 1900_farmmirror_create_farms.sql */
+-- @phase: create
+-- @provides: table:farms
+-- @requires: table:clinics, function:uuid_v7_bin
+-- 備考: 索引/UNIQUE/FK/トリガは別ファイルへ分離（本文は原文の列定義を維持）
+
+--SET NAMES utf8mb4;はinitに分離
+
+DROP TABLE IF EXISTS farms;
+CREATE TABLE farms (
+  id               INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  uuid             BINARY(16) NOT NULL,
+  clinic_uuid      BINARY(16) NOT NULL,              -- ↔ clinics.uuid（院所属・厳格）
+  name             VARCHAR(120) NOT NULL,
+  billing_name     VARCHAR(120) NULL,
+  billing_address  VARCHAR(255) NULL,
+
+  row_hash         CHAR(64) NULL,                    -- 任意：差分検出や外部同期の補助
+  created_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  deleted_at       DATETIME NULL,                    -- ソフトデリート（論理削除）
+  row_version      BIGINT UNSIGNED NOT NULL DEFAULT 1 -- 楽観ロック/差分検知
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci ROW_FORMAT=DYNAMIC;
+<<<END patches/1900_farmmirror_create_farms.sql>>>
+
+<<<FILE patches/1910_farmmirror_idx_farms.sql>>>
+/* 1910_farmmirror_idx_farms.sql */
+-- @phase: idx
+-- @provides: index:uq_farms_uuid, index:uq_farms_uuid_clinic, index:idx_farms_name, index:idx_farms_list, index:idx_farms_clinic_list
+-- @requires: table:farms
+
+CREATE UNIQUE INDEX uq_farms_uuid         ON farms (uuid);
+CREATE UNIQUE INDEX uq_farms_uuid_clinic  ON farms (uuid, clinic_uuid); -- 合成FK参照先
+CREATE INDEX        idx_farms_name        ON farms (name);
+CREATE INDEX        idx_farms_list        ON farms (deleted_at, updated_at, id);
+CREATE INDEX        idx_farms_clinic_list ON farms (clinic_uuid, deleted_at, updated_at, id);
+<<<END patches/1910_farmmirror_idx_farms.sql>>>
+
+<<<FILE patches/1911_farmmirror_fk_farms_clinic.sql>>>
+/* 1911_farmmirror_fk_farms_clinic.sql */
+-- @phase: fk
+-- @provides: fk:fk_farms_clinic
+-- @requires: table:farms, table:clinics
+
+ALTER TABLE farms
+  ADD CONSTRAINT fk_farms_clinic
+    FOREIGN KEY (clinic_uuid) REFERENCES clinics(uuid)
+    ON UPDATE CASCADE ON DELETE RESTRICT;
+<<<END patches/1911_farmmirror_fk_farms_clinic.sql>>>
+
+<<<FILE patches/1920_farmmirror_tr_farms_bi_uuid_v7.sql>>>
+/* 1920_farmmirror_tr_farms_bi_uuid_v7.sql */
+-- @phase: trigger
+-- @provides: trigger:tr_farms_bi_uuid_v7
+-- @requires: table:farms, function:uuid_v7_bin
+-- 役割: UUID未指定時の自動採番（原文どおり）
+
+DROP TRIGGER IF EXISTS tr_farms_bi_uuid_v7;
+DELIMITER $$
+CREATE TRIGGER tr_farms_bi_uuid_v7
+BEFORE INSERT ON farms
+FOR EACH ROW
+BEGIN
+  /* UUIDはBINARY(16)/v7想定。未指定時のみ自動採番。 */
+  IF NEW.uuid IS NULL OR NEW.uuid = UNHEX(REPEAT('0',32)) THEN
+    SET NEW.uuid = uuid_v7_bin();
+  END IF;
+END$$
+DELIMITER ;
+<<<END patches/1920_farmmirror_tr_farms_bi_uuid_v7.sql>>>
+
+<<<FILE patches/1921_farmmirror_tr_farms_bu_rowver_lockuuid.sql>>>
+/* 1921_farmmirror_tr_farms_bu_rowver_lockuuid.sql */
+-- @phase: trigger
+-- @provides: trigger:tr_farms_bu_rowver_lockuuid
+-- @requires: table:farms
+-- 役割: UUID固定＋row_versionインクリメント（原文どおり）
+
+DROP TRIGGER IF EXISTS tr_farms_bu_rowver_lockuuid;
+DELIMITER $$
+CREATE TRIGGER tr_farms_bu_rowver_lockuuid
+BEFORE UPDATE ON farms
+FOR EACH ROW
+BEGIN
+  /* UUIDは不変・row_versionは+1。clinic_uuidの付け替えはFKが整合性を担保。 */
+  SET NEW.uuid = OLD.uuid;
+  SET NEW.row_version = OLD.row_version + 1;
+END$$
+DELIMITER ;
+<<<END patches/1921_farmmirror_tr_farms_bu_rowver_lockuuid.sql>>>
+
+<<<FILE patches/1930_farmmirror_create_vet_users.sql>>>
+/* 1930_farmmirror_create_vet_users.sql */
+-- @phase: create
+-- @provides: table:vet_users
+-- @requires: table:clinics, function:uuid_v7_bin
+
+DROP TABLE IF EXISTS vet_users;
+CREATE TABLE vet_users (
+  id                 INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  uuid               BINARY(16) NOT NULL,
+  clinic_uuid        BINARY(16) NOT NULL,            -- ↔ clinics.uuid
+  display_name       VARCHAR(100) NOT NULL,
+  email              VARCHAR(255) NULL,
+  phone              VARCHAR(50) NULL,
+  role_label         VARCHAR(100) NULL,              -- 例: 院長/獣医師/スタッフ
+  clinic_branch_name VARCHAR(120) NULL,              -- 分院メモ（UI補助）
+
+  created_at         DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at         DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  deleted_at         DATETIME NULL,
+  row_version        BIGINT UNSIGNED NOT NULL DEFAULT 1
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci ROW_FORMAT=DYNAMIC;
+<<<END patches/1930_farmmirror_create_vet_users.sql>>>
+
+<<<FILE patches/1940_farmmirror_idx_vet_users.sql>>>
+/* 1940_farmmirror_idx_vet_users.sql */
+-- @phase: idx
+-- @provides: index:uq_vet_users_uuid, index:idx_vet_users_name, index:idx_vet_users_email, index:idx_vet_users_list, index:idx_vet_users_clinic_list
+-- @requires: table:vet_users
+
+CREATE UNIQUE INDEX uq_vet_users_uuid        ON vet_users (uuid);
+CREATE INDEX        idx_vet_users_name       ON vet_users (display_name);
+CREATE INDEX        idx_vet_users_email      ON vet_users (email);
+CREATE INDEX        idx_vet_users_list       ON vet_users (deleted_at, updated_at, id);
+CREATE INDEX        idx_vet_users_clinic_list ON vet_users (clinic_uuid, deleted_at, updated_at, id);
+<<<END patches/1940_farmmirror_idx_vet_users.sql>>>
+
+<<<FILE patches/1941_farmmirror_fk_vet_users_clinic.sql>>>
+/* 1941_farmmirror_fk_vet_users_clinic.sql */
+-- @phase: fk
+-- @provides: fk:fk_vet_users_clinic
+-- @requires: table:vet_users, table:clinics
+
+ALTER TABLE vet_users
+  ADD CONSTRAINT fk_vet_users_clinic
+    FOREIGN KEY (clinic_uuid) REFERENCES clinics(uuid)
+    ON UPDATE CASCADE ON DELETE RESTRICT;
+<<<END patches/1941_farmmirror_fk_vet_users_clinic.sql>>>
+
+<<<FILE patches/1950_farmmirror_tr_vet_users_bi_uuid_v7.sql>>>
+/* 1950_farmmirror_tr_vet_users_bi_uuid_v7.sql */
+-- @phase: trigger
+-- @provides: trigger:tr_vet_users_bi_uuid_v7
+-- @requires: table:vet_users, function:uuid_v7_bin
+
+DROP TRIGGER IF EXISTS tr_vet_users_bi_uuid_v7;
+DELIMITER $$
+CREATE TRIGGER tr_vet_users_bi_uuid_v7
+BEFORE INSERT ON vet_users
+FOR EACH ROW
+BEGIN
+  IF NEW.uuid IS NULL OR NEW.uuid = UNHEX(REPEAT('0',32)) THEN
+    SET NEW.uuid = uuid_v7_bin();
+  END IF;
+END$$
+DELIMITER ;
+<<<END patches/1950_farmmirror_tr_vet_users_bi_uuid_v7.sql>>>
+
+<<<FILE patches/1951_farmmirror_tr_vet_users_bu_rowver_lockuuid.sql>>>
+/* 1951_farmmirror_tr_vet_users_bu_rowver_lockuuid.sql */
+-- @phase: trigger
+-- @provides: trigger:tr_vet_users_bu_rowver_lockuuid
+-- @requires: table:vet_users
+
+DROP TRIGGER IF EXISTS tr_vet_users_bu_rowver_lockuuid;
+DELIMITER $$
+CREATE TRIGGER tr_vet_users_bu_rowver_lockuuid
+BEFORE UPDATE ON vet_users
+FOR EACH ROW
+BEGIN
+  SET NEW.uuid = OLD.uuid;
+  SET NEW.row_version = OLD.row_version + 1;
+END$$
+DELIMITER ;
+<<<END patches/1951_farmmirror_tr_vet_users_bu_rowver_lockuuid.sql>>>
+
+<<<FILE patches/1960_farmmirror_create_farm_users.sql>>>
+/* 1960_farmmirror_create_farm_users.sql */
+-- @phase: create
+-- @provides: table:farm_users
+-- @requires: table:farms, function:uuid_v7_bin
+
+DROP TABLE IF EXISTS farm_users;
+CREATE TABLE farm_users (
+  id           INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  uuid         BINARY(16) NOT NULL,
+
+  farm_uuid    BINARY(16) NOT NULL,                 -- ↔ farms.uuid
+  clinic_uuid  BINARY(16) NOT NULL,                 -- 院スコープ検索用に保持（親から継承）
+
+  display_name VARCHAR(100) NOT NULL,
+  email        VARCHAR(255) NULL,
+  phone        VARCHAR(50) NULL,
+  role_label   VARCHAR(100) NULL,                   -- 例: 場長/経理/担当
+
+  created_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  deleted_at   DATETIME NULL,
+  row_version  BIGINT UNSIGNED NOT NULL DEFAULT 1
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci ROW_FORMAT=DYNAMIC;
+<<<END patches/1960_farmmirror_create_farm_users.sql>>>
+
+<<<FILE patches/1970_farmmirror_idx_farm_users.sql>>>
+/* 1970_farmmirror_idx_farm_users.sql */
+-- @phase: idx
+-- @provides: index:uq_farm_users_uuid, index:idx_farm_users_farm, index:idx_farm_users_email, index:idx_farm_users_list, index:idx_farm_users_clinic_list
+-- @requires: table:farm_users
+
+CREATE UNIQUE INDEX uq_farm_users_uuid        ON farm_users (uuid);
+CREATE INDEX        idx_farm_users_farm       ON farm_users (farm_uuid, display_name);
+CREATE INDEX        idx_farm_users_email      ON farm_users (email);
+CREATE INDEX        idx_farm_users_list       ON farm_users (deleted_at, updated_at, id);
+CREATE INDEX        idx_farm_users_clinic_list ON farm_users (clinic_uuid, deleted_at, updated_at, id);
+<<<END patches/1970_farmmirror_idx_farm_users.sql>>>
+
+<<<FILE patches/1971_farmmirror_fk_farm_users_farm_clinic.sql>>>
+/* 1971_farmmirror_fk_farm_users_farm_clinic.sql */
+-- @phase: fk
+-- @provides: fk:fk_fu_farm_clinic
+-- @requires: table:farm_users, table:farms (unique: uq_farms_uuid_clinic)
+
+ALTER TABLE farm_users
+  ADD CONSTRAINT fk_fu_farm_clinic
+    FOREIGN KEY (farm_uuid, clinic_uuid)
+    REFERENCES farms (uuid, clinic_uuid)
+    ON UPDATE CASCADE
+    ON DELETE RESTRICT;
+<<<END patches/1971_farmmirror_fk_farm_users_farm_clinic.sql>>>
+
+<<<FILE patches/1980_farmmirror_tr_farm_users_bi_uuid_v7.sql>>>
+/* 1980_farmmirror_tr_farm_users_bi_uuid_v7.sql */
+-- @phase: trigger
+-- @provides: trigger:tr_farm_users_bi_uuid_v7
+-- @requires: table:farm_users, table:farms, function:uuid_v7_bin
+
+DROP TRIGGER IF EXISTS tr_farm_users_bi_uuid_v7;
+DELIMITER $$
+CREATE TRIGGER tr_farm_users_bi_uuid_v7
+BEFORE INSERT ON farm_users
+FOR EACH ROW
+BEGIN
+  DECLARE v_clinic BINARY(16);
+
+  IF NEW.uuid IS NULL OR NEW.uuid = UNHEX(REPEAT('0',32)) THEN
+    SET NEW.uuid = uuid_v7_bin();
+  END IF;
+
+  /* 親farmから clinic_uuid を継承（手入力・取り違えの防止） */
+  SELECT f.clinic_uuid INTO v_clinic
+    FROM farms f WHERE f.uuid = NEW.farm_uuid LIMIT 1;
+  SET NEW.clinic_uuid = v_clinic;
+END$$
+DELIMITER ;
+<<<END patches/1980_farmmirror_tr_farm_users_bi_uuid_v7.sql>>>
+
+<<<FILE patches/1981_farmmirror_tr_farm_users_bu_rowver_lockuuid.sql>>>
+/* 1981_farmmirror_tr_farm_users_bu_rowver_lockuuid.sql */
+-- @phase: trigger
+-- @provides: trigger:tr_farm_users_bu_rowver_lockuuid
+-- @requires: table:farm_users, table:farms
+
+DROP TRIGGER IF EXISTS tr_farm_users_bu_rowver_lockuuid;
+DELIMITER $$
+CREATE TRIGGER tr_farm_users_bu_rowver_lockuuid
+BEFORE UPDATE ON farm_users
+FOR EACH ROW
+BEGIN
+  DECLARE v_clinic BINARY(16);
+
+  SET NEW.uuid = OLD.uuid;                    -- UUIDは不変
+  SET NEW.row_version = OLD.row_version + 1;  -- 楽観ロック
+
+  /* 親farmの変更や親側clinic付け替えに追随（再継承） */
+  SELECT f.clinic_uuid INTO v_clinic
+    FROM farms f WHERE f.uuid = NEW.farm_uuid LIMIT 1;
+  SET NEW.clinic_uuid = v_clinic;
+END$$
+DELIMITER ;
+<<<END patches/1981_farmmirror_tr_farm_users_bu_rowver_lockuuid.sql>>>
+
+<<<FILE patches/1990_farmmirror_create_farmdb_farms_mirror.sql>>>
+/* 1990_farmmirror_create_farmdb_farms_mirror.sql */
+-- @phase: create
+-- @provides: table:farmdb_farms_mirror
+
+DROP TABLE IF EXISTS farmdb_farms_mirror;
+CREATE TABLE farmdb_farms_mirror (
+  id                INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  uuid              BINARY(16) NOT NULL UNIQUE,     -- farmDB側 farm.uuid
+  clinic_uuid       BINARY(16) NULL,                -- farmDBの値そのまま（NULL可）
+  name              VARCHAR(120) NOT NULL,
+  billing_name      VARCHAR(120) NULL,
+  billing_address   VARCHAR(255) NULL,
+  deleted_at        DATETIME NULL,                  -- 外部削除の鏡像（tombstone）
+  updated_at_source DATETIME NULL,                  -- farmDB側の更新時刻（差分カーソル用）
+
+  created_at        DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at        DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci ROW_FORMAT=DYNAMIC;
+<<<END patches/1990_farmmirror_create_farmdb_farms_mirror.sql>>>
+
+<<<FILE patches/1991_farmmirror_idx_farmdb_farms_mirror.sql>>>
+/* 1991_farmmirror_idx_farmdb_farms_mirror.sql */
+-- @phase: idx
+-- @provides: index:idx_fdb_farms_clinic_list, index:idx_fdb_farms_updated, index:idx_fdb_farms_name
+-- @requires: table:farmdb_farms_mirror
+
+CREATE INDEX idx_fdb_farms_clinic_list ON farmdb_farms_mirror (clinic_uuid, deleted_at, updated_at, id);
+CREATE INDEX idx_fdb_farms_updated     ON farmdb_farms_mirror (updated_at_source);
+CREATE INDEX idx_fdb_farms_name        ON farmdb_farms_mirror (name);
+<<<END patches/1991_farmmirror_idx_farmdb_farms_mirror.sql>>>
+
+<<<FILE patches/1992_farmmirror_create_farmdb_individuals_mirror.sql>>>
+/* 1992_farmmirror_create_farmdb_individuals_mirror.sql */
+-- @phase: create
+-- @provides: table:farmdb_individuals_mirror
+
+DROP TABLE IF EXISTS farmdb_individuals_mirror;
+CREATE TABLE farmdb_individuals_mirror (
+  id                   INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  uuid                 BINARY(16) NOT NULL UNIQUE,
+  clinic_uuid          BINARY(16) NULL,             -- farmDB由来（NULL可）
+  farm_uuid            BINARY(16) NOT NULL,         -- 参照先もfarmDBのUUID（FKなし）
+  user_uuid            BINARY(16) NULL,
+
+  name                 VARCHAR(100) NULL,
+  ear_tag              CHAR(10) NULL,
+  status               ENUM('active','sold','dead','culled') NOT NULL DEFAULT 'active',
+  gender               ENUM('female','male','cast','unknown') NOT NULL DEFAULT 'unknown',
+  birth_date           DATE NULL,
+  death_date           DATE NULL,
+  sire_name            VARCHAR(100) NULL,
+
+  genetic_dam_uuid     BINARY(16) NULL,
+  nursing_dam_uuid     BINARY(16) NULL,
+  genetic_dam_ear_tag  CHAR(10) NULL,
+  genetic_dam_name     VARCHAR(100) NULL,
+  nursing_dam_ear_tag  CHAR(10) NULL,
+  nursing_dam_name     VARCHAR(100) NULL,
+
+  created_at           DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at           DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  deleted_at           DATETIME NULL,
+  row_version          BIGINT UNSIGNED NOT NULL DEFAULT 1
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci ROW_FORMAT=DYNAMIC;
+<<<END patches/1992_farmmirror_create_farmdb_individuals_mirror.sql>>>
+
+<<<FILE patches/1994_farmmirror_create_farmdb_farm_users_mirror.sql>>>
+/* 1994_farmmirror_create_farmdb_farm_users_mirror.sql */
+-- @phase: create
+-- @provides: table:farmdb_farm_users_mirror
+
+DROP TABLE IF EXISTS farmdb_farm_users_mirror;
+CREATE TABLE farmdb_farm_users_mirror (
+  id           INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  uuid         BINARY(16) NOT NULL UNIQUE,
+  clinic_uuid  BINARY(16) NULL,            -- farmDB由来（NULL可）
+  farm_uuid    BINARY(16) NOT NULL,
+  display_name VARCHAR(100) NOT NULL,
+  email        VARCHAR(255) NULL,
+  phone        VARCHAR(50) NULL,
+  role_label   VARCHAR(100) NULL,
+
+  created_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  deleted_at   DATETIME NULL,
+  row_version  BIGINT UNSIGNED NOT NULL DEFAULT 1
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci ROW_FORMAT=DYNAMIC;
+<<<END patches/1994_farmmirror_create_farmdb_farm_users_mirror.sql>>>
+
+<<<FILE patches/1995_farmmirror_idx_farmdb_farm_users_mirror.sql>>>
+/* 1995_farmmirror_idx_farmdb_farm_users_mirror.sql */
+-- @phase: idx
+-- @provides: index:idx_fdb_farm_users_clinic_list, index:idx_fdb_farm_users_farm, index:idx_fdb_farm_users_email
+-- @requires: table:farmdb_farm_users_mirror
+
+CREATE INDEX idx_fdb_farm_users_clinic_list ON farmdb_farm_users_mirror (clinic_uuid, deleted_at, updated_at, id);
+CREATE INDEX idx_fdb_farm_users_farm        ON farmdb_farm_users_mirror (farm_uuid, display_name);
+CREATE INDEX idx_fdb_farm_users_email       ON farmdb_farm_users_mirror (email);
+<<<END patches/1995_farmmirror_idx_farmdb_farm_users_mirror.sql>>>
+
+<<<FILE patches/1996_farmmirror_create_entity_links.sql>>>
+/* 1996_farmmirror_create_entity_links.sql */
+-- @phase: create
+-- @provides: table:entity_links
+-- @requires: table:farms, table:farm_users, table:farmdb_*_mirror, table:individuals (individual分岐を使う場合)
+
+DROP TABLE IF EXISTS entity_links;
+CREATE TABLE entity_links (
+  id            BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+
+  clinic_uuid   BINARY(16) NOT NULL,                  -- ← local 由来（トリガで確定）
+  entity_type   ENUM('farm','individual','farm_user') NOT NULL,
+  source_system ENUM('farmdb') NOT NULL DEFAULT 'farmdb',
+
+  local_uuid    BINARY(16) NOT NULL,                  -- VetDB SoT 側 UUID
+  remote_uuid   BINARY(16) NOT NULL,                  -- farmDB mirror 側 UUID
+
+  is_primary    TINYINT(1) NOT NULL DEFAULT 1,        -- 将来: 多対1許容時の“主”印
+  note          VARCHAR(255) NULL,
+
+  created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci ROW_FORMAT=DYNAMIC;
+<<<END patches/1996_farmmirror_create_entity_links.sql>>>
+
+<<<FILE patches/1997_farmmirror_idx_entity_links.sql>>>
+/* 1997_farmmirror_idx_entity_links.sql */
+-- @phase: idx
+-- @provides: index:uq_entity_links_remote, index:idx_entity_links_local, index:idx_entity_links_clinic
+-- @requires: table:entity_links
+
+CREATE UNIQUE INDEX uq_entity_links_remote ON entity_links (entity_type, source_system, remote_uuid);
+CREATE INDEX        idx_entity_links_local  ON entity_links (entity_type, local_uuid);
+CREATE INDEX        idx_entity_links_clinic ON entity_links (clinic_uuid, entity_type, updated_at, id);
+<<<END patches/1997_farmmirror_idx_entity_links.sql>>>
+
+<<<FILE patches/1998_farmmirror_tr_entity_links_bi_scope.sql>>>
+/* 1998_farmmirror_tr_entity_links_bi_scope.sql */
+-- @phase: trigger
+-- @provides: trigger:tr_entity_links_bi_scope
+-- @requires: table:entity_links, table:farms, table:farm_users, table:farmdb_*_mirror, table:individuals(任意)
+-- 役割: local由来clinicの強制確定＋remote clinicとの越境拒否（原文どおり）
+
+DROP TRIGGER IF EXISTS tr_entity_links_bi_scope;
+DELIMITER $$
+CREATE TRIGGER tr_entity_links_bi_scope
+BEFORE INSERT ON entity_links
+FOR EACH ROW
+BEGIN
+  DECLARE v_local_clinic  BINARY(16);
+  DECLARE v_remote_clinic BINARY(16);
+
+  /* 1) local 側 clinic を確定（entity_typeに応じて参照先が異なる） */
+  CASE NEW.entity_type
+    WHEN 'farm' THEN
+      SELECT clinic_uuid INTO v_local_clinic
+        FROM farms WHERE uuid = NEW.local_uuid LIMIT 1;
+
+    WHEN 'farm_user' THEN
+      /* farm_users は合成FKにより (farm_uuid, clinic_uuid) が親と常に一致 */
+      SELECT clinic_uuid INTO v_local_clinic
+        FROM farm_users WHERE uuid = NEW.local_uuid LIMIT 1;
+
+    WHEN 'individual' THEN
+      /* 注意: individuals（SoT）が必要。未導入ならこの分岐は利用しないこと。 */
+      SELECT f.clinic_uuid INTO v_local_clinic
+        FROM individuals i
+        JOIN farms f ON f.uuid = i.farm_uuid
+       WHERE i.uuid = NEW.local_uuid
+       LIMIT 1;
+  END CASE;
+  SET NEW.clinic_uuid = v_local_clinic;
+
+  /* 2) remote 側 clinic を取得して院越境を拒否（NULLは許容＝未所属→収容） */
+  CASE NEW.entity_type
+    WHEN 'farm' THEN
+      SELECT clinic_uuid INTO v_remote_clinic
+        FROM farmdb_farms_mirror WHERE uuid = NEW.remote_uuid LIMIT 1;
+
+    WHEN 'farm_user' THEN
+      SELECT clinic_uuid INTO v_remote_clinic
+        FROM farmdb_farm_users_mirror WHERE uuid = NEW.remote_uuid LIMIT 1;
+
+    WHEN 'individual' THEN
+      SELECT clinic_uuid INTO v_remote_clinic
+        FROM farmdb_individuals_mirror WHERE uuid = NEW.remote_uuid LIMIT 1;
+  END CASE;
+
+  IF v_remote_clinic IS NOT NULL AND v_remote_clinic <> v_local_clinic THEN
+    SIGNAL SQLSTATE '45000'
+      SET MESSAGE_TEXT = 'Cross-clinic link is not allowed';
+  END IF;
+END$$
+DELIMITER ;
+<<<END patches/1998_farmmirror_tr_entity_links_bi_scope.sql>>>
+
+<<<FILE patches/1999_farmmirror_tr_entity_links_bu_scope.sql>>>
+/* 1999_farmmirror_tr_entity_links_bu_scope.sql */
+-- @phase: trigger
+-- @provides: trigger:tr_entity_links_bu_scope
+-- @requires: table:entity_links, table:farms, table:farm_users, table:farmdb_*_mirror, table:individuals(任意)
+
+DROP TRIGGER IF EXISTS tr_entity_links_bu_scope;
+DELIMITER $$
+CREATE TRIGGER tr_entity_links_bu_scope
+BEFORE UPDATE ON entity_links
+FOR EACH ROW
+BEGIN
+  DECLARE v_local_clinic  BINARY(16);
+  DECLARE v_remote_clinic BINARY(16);
+
+  CASE NEW.entity_type
+    WHEN 'farm' THEN
+      SELECT clinic_uuid INTO v_local_clinic
+        FROM farms WHERE uuid = NEW.local_uuid LIMIT 1;
+
+    WHEN 'farm_user' THEN
+      SELECT clinic_uuid INTO v_local_clinic
+        FROM farm_users WHERE uuid = NEW.local_uuid LIMIT 1;
+
+    WHEN 'individual' THEN
+      SELECT f.clinic_uuid INTO v_local_clinic
+        FROM individuals i
+        JOIN farms f ON f.uuid = i.farm_uuid
+       WHERE i.uuid = NEW.local_uuid
+       LIMIT 1;
+  END CASE;
+  SET NEW.clinic_uuid = v_local_clinic;
+
+  CASE NEW.entity_type
+    WHEN 'farm' THEN
+      SELECT clinic_uuid INTO v_remote_clinic
+        FROM farmdb_farms_mirror WHERE uuid = NEW.remote_uuid LIMIT 1;
+
+    WHEN 'farm_user' THEN
+      SELECT clinic_uuid INTO v_remote_clinic
+        FROM farmdb_farm_users_mirror WHERE uuid = NEW.remote_uuid LIMIT 1;
+
+    WHEN 'individual' THEN
+      SELECT clinic_uuid INTO v_remote_clinic
+        FROM farmdb_individuals_mirror WHERE uuid = NEW.remote_uuid LIMIT 1;
+  END CASE;
+
+  IF v_remote_clinic IS NOT NULL AND v_remote_clinic <> v_local_clinic THEN
+    SIGNAL SQLSTATE '45000'
+      SET MESSAGE_TEXT = 'Cross-clinic link is not allowed';
+  END IF;
+END$$
+DELIMITER ;
+<<<END patches/1999_farmmirror_tr_entity_links_bu_scope.sql>>>
+
