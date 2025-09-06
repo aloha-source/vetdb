@@ -1,165 +1,118 @@
-name: AI Bundle — Apply (wip → main PR)
+name: AI Bundle — Apply (branch-local PR)
 
 on:
   push:
-    branches: [ wip ]          # ← wip でのコミットを検知
+    # どのブランチでも、ai_inbox/*.txt をコミットしたら起動
     paths:
       - 'ai_inbox/*.txt'
   workflow_dispatch:
     inputs:
-      source_branch:
-        description: 'Bundleを読むブランチ'
-        required: false
-        default: 'wip'
-      target_base:
-        description: '適用先のベースブランチ（PRの宛先）'
-        required: false
-        default: 'main'
       bundle_path:
-        description: 'ai_inbox/xxx.txt（source_branch上のパス）'
+        description: 'Path to bundle in the current branch (e.g., ai_inbox/ai_bundle_fixed.txt)'
         required: false
         default: 'ai_inbox/ai_bundle_fixed.txt'
       pr_paths:
-        description: 'PRに含めるパス（カンマ/改行区切り）。未指定時は # PR_PATHS または patches/**'
+        description: 'Limit PR to these globs (comma/newline separated). Default = read from # PR_PATHS or patches/**'
         required: false
         default: ''
 
 jobs:
   apply:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      pull-requests: write
+    permissions: { contents: write, pull-requests: write }
 
     steps:
-      - name: Resolve refs
-        id: refs
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "src=${{ github.event.inputs.source_branch }}" >> $GITHUB_OUTPUT
-            echo "base=${{ github.event.inputs.target_base }}"  >> $GITHUB_OUTPUT
-          else
-            echo "src=wip"  >> $GITHUB_OUTPUT
-            echo "base=main" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Checkout base (main)
+      # PRのベースにするのは「このWorkflowが走っているブランチ」
+      - name: Checkout base branch (this branch)
         uses: actions/checkout@v4
         with:
-          ref: ${{ steps.refs.outputs.base }}
+          ref: ${{ github.ref }}
           fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with: { python-version: '3.x' }
 
-      - name: Fetch source branch (wip)
-        run: |
-          git fetch --no-tags --prune origin ${{ steps.refs.outputs.src }} --depth=50
-
-      - name: Determine bundle files
-        id: find
+      - name: Gather bundles (push or manual)
+        id: bundles
         shell: bash
         run: |
+          set -e
           mkdir -p .bundles
+
           if [ "${{ github.event_name }}" = "push" ]; then
             BEFORE="${{ github.event.before }}"
             AFTER="${{ github.sha }}"
+            # 必要なオブジェクトを取得
+            git fetch --no-tags --depth=50 origin $BEFORE $AFTER || true
             files=$(git diff --name-only "$BEFORE" "$AFTER" -- 'ai_inbox/*.txt' || true)
+            list=""
+            for f in $files; do
+              [ -z "$f" ] && continue
+              # 変更後（AFTER）の内容を取り出す
+              if git show "$AFTER:$f" > ".bundles/$(basename "$f")"; then
+                list="$list .bundles/$(basename "$f")"
+              fi
+            done
+            echo "files=$list" >> $GITHUB_OUTPUT
+            [ -n "$list" ] || { echo "::error::No ai_inbox/*.txt changes found in push"; exit 1; }
           else
-            files="${{ github.event.inputs.bundle_path }}"
+            path="${{ github.event.inputs.bundle_path }}"
+            [ -f "$path" ] || { echo "::error::Bundle not found: $path"; exit 1; }
+            cp "$path" ".bundles/$(basename "$path")"
+            echo "files=.bundles/$(basename "$path")" >> $GITHUB_OUTPUT
           fi
-          # export bundles from source branch into workspace
-          list=""
-          for f in $files; do
-            [ -z "$f" ] && continue
-            if git show "origin/${{ steps.refs.outputs.src }}:$f" > ".bundles/$(basename "$f")"; then
-              list="$list .bundles/$(basename "$f")"
-            fi
-          done
-          echo "files=$list" >> $GITHUB_OUTPUT
-          echo "Bundles: $list"
 
-      - name: Create helper script (apply) if missing
+      - name: Ensure helper (apply) exists
         run: |
           if [ ! -f scripts/apply_ai_bundle.py ]; then
-            mkdir -p scripts
-            cat > scripts/apply_ai_bundle.py <<'PY'
-#!/usr/bin/env python3
-import re, sys, pathlib
-START_RE = re.compile(r'^<<<FILE\\s+(.+?)>>>$')
-END_RE   = re.compile(r'^<<<END\\s+(.+?)>>>$')
-def main():
-    if len(sys.argv) < 2:
-        print("usage: apply_ai_bundle.py <bundle.txt>"); sys.exit(1)
-    bundle = pathlib.Path(sys.argv[1])
-    cur = None; buf=[]; wrote=[]
-    with bundle.open(encoding="utf-8") as f:
-        for raw in f:
-            line = raw.rstrip("\\n")
-            m1 = START_RE.match(line); m2 = END_RE.match(line)
-            if m1: cur = pathlib.Path(m1.group(1)); buf=[]
-            elif m2:
-                endp = pathlib.Path(m2.group(1))
-                if cur is None or endp.as_posix()!=cur.as_posix(): raise RuntimeError(f"Marker mismatch: {endp} vs {cur}")
-                cur.parent.mkdir(parents=True, exist_ok=True)
-                cur.write_text("".join(buf), encoding="utf-8")
-                wrote.append(cur.as_posix()); cur=None; buf=[]
-            else:
-                if cur is not None: buf.append(raw)
-    print("updated files:"); [print(" -", p) for p in wrote]
-if __name__ == "__main__": main()
-PY
+            echo "::error::scripts/apply_ai_bundle.py not found"; exit 1
           fi
           chmod +x scripts/apply_ai_bundle.py
 
-      - name: Apply bundle(s) onto base
+      - name: Apply bundle(s) onto working tree
         run: |
           set -e
-          for f in ${{ steps.find.outputs.files }}; do
-            [ -z "$f" ] && continue
+          for f in ${{ steps.bundles.outputs.files }}; do
             echo "Applying $f"
             python3 scripts/apply_ai_bundle.py "$f"
           done
 
-      - name: Resolve PR paths (input or # PR_PATHS or default)
+      - name: Resolve PR paths (input / header / default)
         id: prpaths
         shell: bash
         run: |
           paths_input="${{ github.event.inputs.pr_paths }}"
           if [ -z "$paths_input" ]; then
-            # read first non-empty PR_PATHS from bundles
-            for f in ${{ steps.find.outputs.files }}; do
+            for f in ${{ steps.bundles.outputs.files }}; do
               hdr="$(head -n 50 "$f" || true)"
               line="$(printf "%s\n" "$hdr" | sed -n 's/^# *PR_PATHS:\s*//p' | head -n1)"
               if [ -n "$line" ]; then paths_input="$line"; break; fi
             done
           fi
-          if [ -z "$paths_input" ]; then
-            paths_input="patches/**"
-          fi
+          [ -n "$paths_input" ] || paths_input="patches/**"
           norm="$(printf "%s\n" "$paths_input" | tr ',' '\n' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | sed '/^$/d')"
           echo "paths<<EOF" >> $GITHUB_OUTPUT
           echo "$norm"      >> $GITHUB_OUTPUT
           echo "EOF"        >> $GITHUB_OUTPUT
-          echo "Resolved PR paths:"; printf "%s\n" "$norm"
+          echo "PR paths:"; printf "%s\n" "$norm"
 
+      # （任意）README再生成：スクリプトがあれば回す。失敗してもPRは作る。
       - name: Optional: regenerate README
         run: |
           if [ -f scripts/gen_readme_scan.py ]; then
-            python3 scripts/gen_readme_scan.py || true
+            python3 scripts/gen_readme_scan.py || echo "README scan failed (ignored)"
           fi
 
-      - name: Create PR to main
+      - name: Create PR (base = this branch)
         uses: peter-evans/create-pull-request@v6
         id: cpr
         with:
-          base: ${{ steps.refs.outputs.base }}   # ← main 宛
-          commit-message: "Apply AI bundle(s) from wip"
-          title: "Apply AI bundle(s) (wip → main)"
+          base: ${{ github.ref_name }}   # ← トリガー元ブランチがPRの宛先
+          commit-message: "Apply AI bundle(s)"
+          title: "Apply AI bundle(s) on ${ { github.ref_name } }"
           body: |
-            Auto-created by **AI Bundle — Apply (wip → main)**.
-            Source branch: `${{ steps.refs.outputs.src }}`
-            Bundles: ${{ steps.find.outputs.files }}
+            Auto-created by **AI Bundle — Apply (branch-local)**.
+            Bundles: ${{ steps.bundles.outputs.files }}
             Paths:
             ${{ steps.prpaths.outputs.paths }}
           branch: "bot/apply-ai-bundle-${{ github.run_number }}"
