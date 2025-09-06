@@ -3,7 +3,7 @@ name: AI Bundle — Apply (branch-local PR)
 on:
   push:
     paths:
-      - 'ai_inbox/*.txt'
+      - 'ai_inbox/*.txt'   # そのブランチに ai_inbox/*.txt をコミットすると起動
   workflow_dispatch:
     inputs:
       bundle_path:
@@ -39,11 +39,19 @@ jobs:
         run: |
           set -e
           mkdir -p .bundles
+
           if [ "${{ github.event_name }}" = "push" ]; then
             BEFORE="${{ github.event.before }}"
             AFTER="${{ github.sha }}"
-            git fetch --no-tags --depth=50 origin "$BEFORE" "$AFTER" || true
-            files=$(git diff --name-only "$BEFORE" "$AFTER" -- 'ai_inbox/*.txt' || true)
+
+            # 通常の差分
+            files="$(git diff --name-only "$BEFORE" "$AFTER" -- 'ai_inbox/*.txt' || true)"
+
+            # 初回コミット（BEFORE が all-zero）等のフォールバック
+            if [ -z "$files" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
+              files="$(git show --name-only --pretty='' "$AFTER" -- 'ai_inbox/*.txt' || true)"
+            fi
+
             list=""
             for f in $files; do
               [ -z "$f" ] && continue
@@ -52,7 +60,7 @@ jobs:
             done
             echo "files=$list" >> $GITHUB_OUTPUT
             if [ -z "$list" ]; then
-              echo "::error::No ai_inbox/*.txt changes found in push"
+              echo "::error::No ai_inbox/*.txt changes found"
               exit 1
             fi
           else
@@ -66,6 +74,7 @@ jobs:
           fi
 
       - name: Ensure helper (apply) exists
+        shell: bash
         run: |
           if [ ! -f scripts/apply_ai_bundle.py ]; then
             echo "::error::scripts/apply_ai_bundle.py not found"; exit 1
@@ -73,6 +82,7 @@ jobs:
           chmod +x scripts/apply_ai_bundle.py
 
       - name: Apply bundle(s) onto working tree
+        shell: bash
         run: |
           set -e
           for f in ${{ steps.bundles.outputs.files }}; do
@@ -100,7 +110,9 @@ jobs:
           echo "EOF"        >> $GITHUB_OUTPUT
           echo "PR paths:"; printf "%s\n" "$norm"
 
+      # 任意：README再生成（存在すれば実行。失敗してもPRは作る）
       - name: Optional: regenerate README
+        shell: bash
         run: |
           if [ -f scripts/gen_readme_scan.py ]; then
             python3 scripts/gen_readme_scan.py || echo "README scan failed (ignored)"
@@ -110,7 +122,7 @@ jobs:
         uses: peter-evans/create-pull-request@v6
         id: cpr
         with:
-          base: ${{ github.ref_name }}
+          base: ${{ github.ref_name }}                 # 同一ブランチをベースにPR
           commit-message: "Apply AI bundle(s)"
           title: "Apply AI bundle(s) on ${{ github.ref_name }}"
           body: |
