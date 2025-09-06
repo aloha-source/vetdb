@@ -1,4 +1,4 @@
-name: AI Bundle — Pack (wip)
+name: AI Bundle — Pack (branch-local)
 
 on:
   workflow_dispatch:
@@ -12,7 +12,7 @@ on:
         required: false
         default: 'patches'
       pr_paths:
-        description: 'PR対象パス（例: patches/receipt/**, patches/checkup/**）'
+        description: 'Optional: embed "# PR_PATHS:" header into bundle'
         required: false
         default: ''
 
@@ -22,12 +22,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: wip              # ← wip をチェックアウト
+          # 実行時に選んだブランチ（UIで選べる）。例: refs/heads/wip
+          ref: ${{ github.ref }}
 
       - uses: actions/setup-python@v5
         with: { python-version: '3.x' }
 
-      - name: Pack bundle from wip
+      - name: Ensure helper (pack) exists
+        run: |
+          if [ ! -f scripts/pack_ai_bundle.py ]; then
+            echo "::error::scripts/pack_ai_bundle.py not found"; exit 1
+          fi
+
+      - name: Pack bundle on this branch
         id: pack
         run: |
           chmod +x scripts/pack_ai_bundle.py || true
@@ -44,16 +51,17 @@ jobs:
           eval "$cmd"
           echo "outfile=${out}" >> $GITHUB_OUTPUT
 
-      - name: Commit to wip (mobile friendly)
+      - name: Commit bundle to this branch
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add ai_out/
-          git commit -m "AI bundle (wip): add $(basename '${{ steps.pack.outputs.outfile }}')" || echo "no changes"
-          git push origin HEAD:wip
+          git commit -m "AI bundle: add $(basename '${{ steps.pack.outputs.outfile }}')" || echo "no changes"
+          # 同じブランチへ push
+          git push origin HEAD:${{ github.ref_name }}
 
       - name: Upload artifact (optional)
         uses: actions/upload-artifact@v4
         with:
-          name: ai_bundle_wip
+          name: ai_bundle
           path: ${{ steps.pack.outputs.outfile }}
