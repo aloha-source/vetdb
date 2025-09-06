@@ -1,0 +1,70 @@
+name: AI Bundle — Apply
+
+on:
+  push:
+    paths:
+      - 'ai_inbox/*.txt'   # ← ここにAI修正版バンドルをコミットすると自動起動
+  workflow_dispatch:
+    inputs:
+      bundle_path:
+        description: 'Path to bundle in repo (e.g., ai_inbox/ai_bundle_fixed.txt)'
+        required: true
+        default: 'ai_inbox/ai_bundle_fixed.txt'
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.x' }
+
+      - name: Determine target bundles
+        id: find
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            files="$(git diff --name-only ${{ github.event.before }} ${{ github.sha }} -- ai_inbox/*.txt || true)"
+          else
+            files="${{ github.event.inputs.bundle_path }}"
+          fi
+          echo "files<<EOF" >> $GITHUB_OUTPUT
+          echo "${files}"     >> $GITHUB_OUTPUT
+          echo "EOF"          >> $GITHUB_OUTPUT
+
+      - name: Apply bundle(s)
+        run: |
+          chmod +x scripts/apply_ai_bundle.py || true
+          set -e
+          echo "${{ steps.find.outputs.files }}" | while read -r f; do
+            [ -z "$f" ] && continue
+            echo "Applying $f"
+            python3 scripts/apply_ai_bundle.py "$f"
+          done
+
+      - name: Optional: regenerate README
+        run: |
+          if [ -f scripts/gen_readme_scan.py ]; then
+            python3 scripts/gen_readme_scan.py || true
+          fi
+
+      - name: Create PR
+        uses: peter-evans/create-pull-request@v6
+        id: cpr
+        with:
+          commit-message: "Apply AI bundle(s) from ai_inbox"
+          title: "Apply AI bundle(s)"
+          body: |
+            Auto-created by **AI Bundle — Apply**.
+            Bundles:
+            ${{ steps.find.outputs.files }}
+          branch: "bot/apply-ai-bundle-${{ github.run_number }}"
+          delete-branch: true
+          labels: ai-bundle, automation
+
+      - name: PR URL
+        run: echo "${{ steps.cpr.outputs.pull-request-url }}"
