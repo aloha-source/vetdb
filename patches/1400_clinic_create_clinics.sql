@@ -9,6 +9,8 @@ SET NAMES utf8mb4;
 /* 再デプロイ安全化（テーブル本体） */
 DROP TABLE IF EXISTS clinics;
 
+-- TEST: clinicsテーブルに対するテストコメント（AIバンドルで挿入）
+
 CREATE TABLE clinics (
   id                INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   uuid              BINARY(16) NOT NULL,                 -- ★不変／更新不可（トリガで固定）
