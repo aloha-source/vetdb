@@ -1,7 +1,7 @@
 # AI_BUNDLE v1
 # root=patches
 <<<FILE patches/300_checkup_create_checkups.sql>>>
-/* 300_checkup_create_checkups.sql */
+/* 300_checkup_create_checkups.sql applytest*/
 -- @phase: create
 -- @provides: table:checkups
 -- @requires: table:clinics, table:visits, table:individuals, table:receipt_header_drafts, function:uuid_v7_bin
