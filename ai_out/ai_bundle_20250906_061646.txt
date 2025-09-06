@@ -1,0 +1,1352 @@
+# AI_BUNDLE v1
+# root=patches
+<<<FILE patches/300_checkup_create_checkups.sql>>>
+/* 300_checkup_create_checkups.sql */
+-- @phase: create
+-- @provides: table:checkups
+-- @requires: table:clinics, table:visits, table:individuals, table:receipt_header_drafts, function:uuid_v7_bin
+
+DROP TABLE IF EXISTS checkups;
+
+CREATE TABLE checkups (
+  id           INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  uuid         BINARY(16) NOT NULL UNIQUE,
+  clinic_uuid  BINARY(16) NOT NULL,          -- ★ CSIFH
+  visit_uuid   BINARY(16) NULL,              -- ↔ visits.uuid（SET NULL）
+  individual_uuid BINARY(16) NOT NULL,       -- ↔ individuals.uuid（RESTRICT）
+
+  /* p017: レシート草稿への直付け（草稿削除で自動デタッチ） */
+  receipt_header_drafts_uuid BINARY(16) NULL, -- ↔ receipt_header_drafts.uuid
+
+  /* 将来の確定カルテ弱リンク（FKなし） */
+  chart_header_uuid BINARY(16) NULL,
+
+  /* SOAP */
+  s_subjective TEXT NULL,
+  o_objective  TEXT NULL,
+  a_assessment TEXT NULL,
+  p_plan       TEXT NULL,
+
+  /* TPR */
+  temp_c     DECIMAL(4,1) NULL,
+  pulse_bpm  SMALLINT UNSIGNED NULL,
+  resp_bpm   SMALLINT UNSIGNED NULL,
+
+  /* 現症・経過 */
+  clinical_course TEXT NULL,
+
+  /* 運用 */
+  status      ENUM('draft','ready') NOT NULL DEFAULT 'draft',
+  created_by  INT UNSIGNED NULL,
+  row_version BIGINT UNSIGNED NOT NULL DEFAULT 1,
+  deleted_at  DATETIME NULL,
+  created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci ROW_FORMAT = DYNAMIC;
+<<<END patches/300_checkup_create_checkups.sql>>>
+
+<<<FILE patches/310_checkup_fk_checkups_clinic_uuid.sql>>>
+/* 310_checkup_fk_checkups_clinic_uuid.sql */
+-- @phase: fk
+-- @provides: fk:fk_checkups_clinic_uuid
+-- @requires: table:checkups, table:clinics
+
+ALTER TABLE checkups
+  ADD CONSTRAINT fk_checkups_clinic_uuid   FOREIGN KEY (clinic_uuid)  REFERENCES clinics(uuid)     ON UPDATE CASCADE ON DELETE RESTRICT;
+<<<END patches/310_checkup_fk_checkups_clinic_uuid.sql>>>
+
+<<<FILE patches/311_checkup_fk_checkups_visit_uuid.sql>>>
+/* 311_checkup_fk_checkups_visit_uuid.sql */
+-- @phase: fk
+-- @provides: fk:fk_checkups_visit_uuid
+-- @requires: table:checkups, table:visits
+
+ALTER TABLE checkups
+  ADD CONSTRAINT fk_checkups_visit_uuid    FOREIGN KEY (visit_uuid)   REFERENCES visits(uuid)      ON UPDATE CASCADE ON DELETE SET NULL;
+<<<END patches/311_checkup_fk_checkups_visit_uuid.sql>>>
+
+<<<FILE patches/312_checkup_fk_checkups_individual_uuid.sql>>>
+/* 312_checkup_fk_checkups_individual_uuid.sql */
+-- @phase: fk
+-- @provides: fk:fk_checkups_individual_uuid
+-- @requires: table:checkups, table:individuals
+
+ALTER TABLE checkups
+  ADD CONSTRAINT fk_checkups_individual_uuid FOREIGN KEY (individual_uuid) REFERENCES individuals(uuid) ON UPDATE RESTRICT ON DELETE RESTRICT;
+<<<END patches/312_checkup_fk_checkups_individual_uuid.sql>>>
+
+<<<FILE patches/313_checkup_fk_checkups_rhd.sql>>>
+/* 313_checkup_fk_checkups_rhd.sql */
+-- @phase: fk
+-- @provides: fk:fk_checkups_rhd
+-- @requires: table:checkups, table:receipt_header_drafts
+
+ALTER TABLE checkups
+  ADD CONSTRAINT fk_checkups_rhd           FOREIGN KEY (receipt_header_drafts_uuid) REFERENCES receipt_header_drafts(uuid) ON UPDATE CASCADE ON DELETE SET NULL;
+<<<END patches/313_checkup_fk_checkups_rhd.sql>>>
+
+<<<FILE patches/320_checkup_idx_checkups.sql>>>
+/* 320_checkup_idx_checkups.sql */
+-- @phase: idx
+-- @provides: index:idx_checkups_visit, index:idx_checkups_individual, index:idx_checkups_visit_ind_crt, index:idx_checkups_visit_ind_uuid, index:idx_checkups_chart_header, index:idx_checkups_list, index:idx_checkups_rhd, index:idx_checkups_clinic
+-- @requires: table:checkups
+
+CREATE INDEX idx_checkups_visit           ON checkups(visit_uuid);
+CREATE INDEX idx_checkups_individual      ON checkups(individual_uuid);
+CREATE INDEX idx_checkups_visit_ind_crt   ON checkups(visit_uuid, individual_uuid, created_at);
+CREATE INDEX idx_checkups_visit_ind_uuid  ON checkups(visit_uuid, individual_uuid, uuid);
+CREATE INDEX idx_checkups_chart_header    ON checkups(chart_header_uuid);
+CREATE INDEX idx_checkups_list            ON checkups(deleted_at, updated_at, id);
+CREATE INDEX idx_checkups_rhd             ON checkups(receipt_header_drafts_uuid, id);
+CREATE INDEX idx_checkups_clinic          ON checkups(clinic_uuid, created_at);
+<<<END patches/320_checkup_idx_checkups.sql>>>
+
+<<<FILE patches/330_checkup_tr_checkups.sql>>>
+/* 330_checkup_tr_checkups_bi_uuid_v7.sql */
+-- @phase: trigger
+-- @provides: trigger:tr_checkups_bi_uuid_v7
+-- @requires: table:checkups, function:uuid_v7_bin, table:visits, table:individuals
+
+DROP TRIGGER IF EXISTS tr_checkups_bi_uuid_v7;
+
+DELIMITER $$
+
+CREATE TRIGGER tr_checkups_bi_uuid_v7
+BEFORE INSERT ON checkups
+FOR EACH ROW
+BEGIN
+  IF NEW.uuid IS NULL OR NEW.uuid = UNHEX(REPEAT('0',32)) THEN
+    SET NEW.uuid = uuid_v7_bin();
+  END IF;
+
+  /* CSIFH: 優先 visit.clinic_uuid → 無ければ individual.clinic_uuid を継承 */
+  IF NEW.clinic_uuid IS NULL OR NEW.clinic_uuid = UNHEX(REPEAT('0',32)) THEN
+    IF NEW.visit_uuid IS NOT NULL THEN
+      SELECT v.clinic_uuid INTO @cu FROM visits v WHERE v.uuid = NEW.visit_uuid LIMIT 1;
+    ELSE
+      SELECT i.clinic_uuid INTO @cu FROM individuals i WHERE i.uuid = NEW.individual_uuid LIMIT 1;
+    END IF;
+    SET NEW.clinic_uuid = @cu;
+  END IF;
+END$$
+
+DELIMITER ;
+<<<END patches/330_checkup_tr_checkups.sql>>>
+
+<<<FILE patches/331_checkup_tr_checkups_bu_rowver.sql>>>
+/* 331_checkup_tr_checkups_bu_rowver.sql */
+-- @phase: trigger
+-- @provides: trigger:tr_checkups_bu_rowver
+-- @requires: table:checkups
+
+DROP TRIGGER IF EXISTS tr_checkups_bu_rowver;
+
+DELIMITER $$
+
+CREATE TRIGGER tr_checkups_bu_rowver
+BEFORE UPDATE ON checkups
+FOR EACH ROW
+BEGIN
+  SET NEW.row_version = OLD.row_version + 1;
+END$$
+
+DELIMITER ;
+<<<END patches/331_checkup_tr_checkups_bu_rowver.sql>>>
+
+<<<FILE patches/340_checkup_create_view_checkups_hex_v.sql>>>
+/* 340_checkup_create_view_checkups_hex_v.sql */
+-- @phase: create
+-- @provides: view:checkups_hex_v
+-- @requires: function:uuid_bin_to_hex, table:checkups
+
+DROP VIEW IF EXISTS checkups_hex_v;
+
+CREATE OR REPLACE VIEW checkups_hex_v AS
+SELECT
+  id,
+  uuid_bin_to_hex(uuid)         AS uuid_hex,
+  uuid_bin_to_hex(clinic_uuid)  AS clinic_uuid_hex,
+  uuid_bin_to_hex(visit_uuid)   AS visit_uuid_hex,
+  uuid_bin_to_hex(individual_uuid) AS individual_uuid_hex,
+  uuid_bin_to_hex(chart_header_uuid) AS chart_header_uuid_hex,
+  s_subjective, o_objective, a_assessment, p_plan,
+  temp_c, pulse_bpm, resp_bpm, clinical_course,
+  status, created_by, deleted_at, created_at, updated_at
+FROM checkups;
+<<<END patches/340_checkup_create_view_checkups_hex_v.sql>>>
+
+<<<FILE patches/500_checkup_create_view_checkups_insurance_context_v.sql>>>
+/* 500_checkup_create_view_checkups_insurance_context_v.sql */
+-- @phase: create
+-- @provides: view:checkups_insurance_context_v
+-- @requires: table:checkups, table:individuals, table:farms
+
+DROP VIEW IF EXISTS checkups_insurance_context_v;
+
+CREATE OR REPLACE VIEW checkups_insurance_context_v AS
+SELECT
+  c.uuid AS checkup_uuid,
+  f.non_insured AS farm_non_insured,
+  CASE WHEN f.non_insured = 1 THEN 'private' ELSE 'insurance' END AS preferred_pay_type
+FROM checkups c
+JOIN individuals i ON i.uuid = c.individual_uuid
+JOIN farms f       ON f.uuid = i.farm_uuid;
+<<<END patches/500_checkup_create_view_checkups_insurance_context_v.sql>>>
+
+<<<FILE patches/730_chart_create_chart_checkups.sql>>>
+/* 730_chart_create_chart_checkups.sql */
+-- @phase: create
+-- @provides: table:chart_checkups
+-- @requires: table:chart_headers, function:uuid_v7_bin
+
+DROP TABLE IF EXISTS chart_checkups;
+
+CREATE TABLE IF NOT EXISTS chart_checkups (
+  id                     INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  uuid                   BINARY(16) NOT NULL UNIQUE,             -- 行UUID
+  chart_uuid             BINARY(16) NOT NULL,                    -- ↔ chart_headers.uuid
+  clinic_uuid            BINARY(16) NOT NULL,                    -- 当時の院（clinics.uuid）値
+  seq_no                 INT UNSIGNED NOT NULL,                  -- ヘッダ内の並び
+
+  source_checkup_uuid    BINARY(16) NOT NULL,                    -- 由来 checkups.uuid（監査）
+  source_visit_uuid      BINARY(16) NULL,                        -- 由来 visits.uuid（任意）
+
+  checkup_at             DATETIME NULL,                          -- 受診日時
+
+  subjective_text        TEXT NULL,
+  objective_text         TEXT NULL,
+  assessment_text        TEXT NULL,
+  plan_text              TEXT NULL,
+  clinical_course_text   TEXT NULL,
+
+  tpr_temp_c             DECIMAL(4,1) NULL,
+  tpr_pulse_bpm          SMALLINT UNSIGNED NULL,
+  tpr_resp_bpm           SMALLINT UNSIGNED NULL,
+
+  created_at             DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+<<<END patches/730_chart_create_chart_checkups.sql>>>
+
+<<<FILE patches/740_chart_fk_chart_checkups_header.sql>>>
+/* 740_chart_fk_chart_checkups_header.sql */
+-- @phase: fk
+-- @provides: fk:fk_chart_checkups_header
+-- @requires: table:chart_checkups, table:chart_headers
+
+ALTER TABLE chart_checkups
+  ADD CONSTRAINT fk_chart_checkups_header
+    FOREIGN KEY (chart_uuid) REFERENCES chart_headers(uuid)
+    ON UPDATE CASCADE ON DELETE CASCADE;
+<<<END patches/740_chart_fk_chart_checkups_header.sql>>>
+
+<<<FILE patches/745_chart_idx_chart_checkups.sql>>>
+/* 745_chart_idx_chart_checkups.sql */
+-- @phase: idx
+-- @provides: index:uq_chart_checkups_hdr_seq, index:idx_chart_checkups_hdr, index:idx_cc_clinic
+-- @requires: table:chart_checkups
+
+CREATE UNIQUE INDEX uq_chart_checkups_hdr_seq ON chart_checkups(chart_uuid, seq_no);
+CREATE INDEX idx_chart_checkups_hdr          ON chart_checkups(chart_uuid);
+CREATE INDEX idx_cc_clinic                   ON chart_checkups(clinic_uuid, chart_uuid);
+<<<END patches/745_chart_idx_chart_checkups.sql>>>
+
+<<<FILE patches/750_chart_tr_chart_checkups_bi_uuid_v7.sql>>>
+/* 750_chart_tr_chart_checkups_bi_uuid_v7.sql */
+-- @phase: trigger
+-- @provides: trigger:tr_chart_checkups_bi_uuid_v7
+-- @requires: table:chart_checkups, function:uuid_v7_bin
+
+DROP TRIGGER IF EXISTS tr_chart_checkups_bi_uuid_v7;
+
+DELIMITER $$
+CREATE TRIGGER tr_chart_checkups_bi_uuid_v7
+BEFORE INSERT ON chart_checkups
+FOR EACH ROW
+BEGIN
+  IF NEW.uuid IS NULL OR LENGTH(NEW.uuid) = 0 THEN
+    SET NEW.uuid = uuid_v7_bin();
+  END IF;
+END $$
+DELIMITER ;
+<<<END patches/750_chart_tr_chart_checkups_bi_uuid_v7.sql>>>
+
+<<<FILE patches/751_chart_tr_chart_checkups_bi_clinic.sql>>>
+/* 751_chart_tr_chart_checkups_bi_clinic.sql */
+-- @phase: trigger
+-- @provides: trigger:tr_chart_checkups_bi_clinic
+-- @requires: table:chart_checkups, table:chart_headers
+
+DROP TRIGGER IF EXISTS tr_chart_checkups_bi_clinic;
+
+DELIMITER $$
+/* CSIFH: INSERT時に親 chart_headers の clinic_uuid を継承して固定 */
+CREATE TRIGGER tr_chart_checkups_bi_clinic
+BEFORE INSERT ON chart_checkups
+FOR EACH ROW
+BEGIN
+  IF NEW.clinic_uuid IS NULL OR LENGTH(NEW.clinic_uuid) = 0 THEN
+    SELECT ch.clinic_uuid INTO NEW.clinic_uuid
+      FROM chart_headers ch
+     WHERE ch.uuid = NEW.chart_uuid
+     LIMIT 1;
+  END IF;
+END $$
+DELIMITER ;
+<<<END patches/751_chart_tr_chart_checkups_bi_clinic.sql>>>
+
+<<<FILE patches/2020_receipt_create_receipt_checkups.sql>>>
+/* 2020_receipt_create_receipt_checkups.sql */
+-- @phase: create
+-- @feature: receipt
+-- @provides: table:receipt_checkups
+-- @requires: function:uuid_v7_bin, table:receipt_headers
+
+DROP TABLE IF EXISTS receipt_checkups;
+CREATE TABLE IF NOT EXISTS receipt_checkups (
+  id                  INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  uuid                BINARY(16) NOT NULL UNIQUE,                  -- v7（items から参照）
+  receipt_header_uuid BINARY(16) NOT NULL,                         -- ↔ receipt_headers.uuid（弱リンク）
+  clinic_uuid         BINARY(16) NULL,                             -- 親ヘッダから固定継承
+  source_checkup_uuid BINARY(16) NOT NULL,                         -- 由来：checkups.uuid
+  checkup_at          DATETIME NULL,                               -- 任意：診療日時など
+  individual_uuid     BINARY(16) NULL,                             -- 任意：印字補助
+  individual_label    VARCHAR(120) NULL,                           -- 任意：個体表示名 等
+  created_at          DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci ROW_FORMAT=DYNAMIC;
+<<<END patches/2020_receipt_create_receipt_checkups.sql>>>
+
+<<<FILE patches/2025_receipt_idx_receipt_checkups.sql>>>
+/* 2025_receipt_idx_receipt_checkups.sql */
+-- @phase: idx
+-- @feature: receipt
+-- @provides: index:uq_rcpt_hdr_src, index:idx_rcpt_ckp_hdr, index:idx_rcpt_ckp_src, index:idx_rcpt_ckp_clinic
+-- @requires: table:receipt_checkups
+
+CREATE UNIQUE INDEX uq_rcpt_hdr_src   ON receipt_checkups (receipt_header_uuid, source_checkup_uuid);
+CREATE INDEX        idx_rcpt_ckp_hdr  ON receipt_checkups (receipt_header_uuid, id);
+CREATE INDEX        idx_rcpt_ckp_src  ON receipt_checkups (source_checkup_uuid);
+CREATE INDEX        idx_rcpt_ckp_clinic ON receipt_checkups (clinic_uuid, receipt_header_uuid, id);
+<<<END patches/2025_receipt_idx_receipt_checkups.sql>>>
+
+<<<FILE patches/2026_receipt_tr_receipt_checkups_bi_uuid_v7.sql>>>
+/* 2026_receipt_tr_receipt_checkups_bi_uuid_v7.sql */
+-- @phase: trigger
+-- @feature: receipt
+-- @provides: trigger:tr_receipt_checkups_bi_uuid_v7
+-- @requires: table:receipt_checkups, function:uuid_v7_bin
+
+DROP TRIGGER IF EXISTS tr_receipt_checkups_bi_uuid_v7;
+DELIMITER $$
+CREATE TRIGGER tr_receipt_checkups_bi_uuid_v7
+BEFORE INSERT ON receipt_checkups
+FOR EACH ROW
+BEGIN
+  DECLARE v_ckp_clinic BINARY(16);
+
+  /* uuid未指定なら v7 を自動採番（items が参照するため必須） */
+  IF NEW.uuid IS NULL OR LENGTH(NEW.uuid)=0 THEN
+    SET NEW.uuid = uuid_v7_bin();
+  END IF;
+
+  /* ヘッダから clinic_uuid を固定継承 */
+  IF NEW.clinic_uuid IS NULL THEN
+    SELECT h.clinic_uuid INTO v_ckp_clinic
+      FROM receipt_headers h WHERE h.uuid = NEW.receipt_header_uuid LIMIT 1;
+    SET NEW.clinic_uuid = v_ckp_clinic;
+  END IF;
+END $$
+DELIMITER ;
+<<<END patches/2026_receipt_tr_receipt_checkups_bi_uuid_v7.sql>>>
+
+<<<FILE patches/2027_receipt_tr_receipt_checkups_bi_clinic_inherit.sql>>>
+/* 2027_receipt_tr_receipt_checkups_bi_clinic_inherit.sql */
+-- @phase: trigger
+-- @feature: receipt
+-- @provides: trigger:tr_receipt_checkups_bi_clinic_inherit
+-- @requires: table:receipt_checkups, table:receipt_headers
+
+DROP TRIGGER IF EXISTS tr_receipt_checkups_bi_clinic_inherit;
+DELIMITER $$
+CREATE TRIGGER tr_receipt_checkups_bi_clinic_inherit
+BEFORE INSERT ON receipt_checkups
+FOR EACH ROW
+BEGIN
+  IF NEW.clinic_uuid IS NULL THEN
+    SELECT h.clinic_uuid INTO NEW.clinic_uuid
+      FROM receipt_headers h WHERE h.uuid = NEW.receipt_header_uuid LIMIT 1;
+  END IF;
+END $$
+DELIMITER ;
+<<<END patches/2027_receipt_tr_receipt_checkups_bi_clinic_inherit.sql>>>
+
+<<<FILE patches/A010_checkups_create_receipt_header_drafts.sql>>>
+/* checkups分割時に混入したスタブのためアーカイブ。010_checkup_create_receipt_header_drafts.sql */
+-- @phase: create
+-- @provides: table:receipt_header_drafts
+-- @requires:
+
+DROP TABLE IF EXISTS receipt_header_drafts;
+
+CREATE TABLE receipt_header_drafts (
+  id   INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  uuid BINARY(16) NOT NULL UNIQUE,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci ROW_FORMAT=DYNAMIC;
+<<<END patches/A010_checkups_create_receipt_header_drafts.sql>>>
+
+<<<FILE patches/checkups_desease_chart_p6.1.sql>>>
+SET NAMES utf8mb4;
+
+-- 任意：病名マスタ（既存があれば作成不要）
+CREATE TABLE IF NOT EXISTS disease_master (
+  id    INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  code  VARCHAR(32) NOT NULL UNIQUE,
+  name  VARCHAR(255) NOT NULL,
+  INDEX idx_name (name)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 1) カルテヘッダ（請求単位＋各種スナップショット）
+CREATE TABLE IF NOT EXISTS chart_headers (
+  id                       INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  uuid                     CHAR(36) NOT NULL UNIQUE,
+
+  -- 紐付け
+  individual_uuid          CHAR(36) NOT NULL,      -- ↔ individuals.uuid
+  farm_uuid                CHAR(36) NOT NULL,      -- ↔ farms.uuid
+  insurance_enrollment_id  INT UNSIGNED NULL,      -- ↔ insurance_enrollments.id（任意）
+
+  -- 期間識別（保険年度）
+  fiscal_year              YEAR NOT NULL,
+  claim_month              TINYINT UNSIGNED NOT NULL,  -- 1-12
+
+  -- 転帰・日付・回数
+  outcome_code             TINYINT UNSIGNED NOT NULL,  -- 1治癒/2死亡/3法令殺/4廃用/5中止
+  onset_date               DATE NULL,                  -- 発病
+  first_visit_date         DATE NULL,                  -- 初診
+  last_visit_date          DATE NULL,                  -- 終診
+  outcome_date             DATE NULL,                  -- 転帰
+  visit_count              INT UNSIGNED NOT NULL DEFAULT 0,   -- カルテ内 checkups 件数（閉帳時に確定）
+
+  -- 主訴・自由診断名
+  chief_complaint          VARCHAR(255) NULL,
+  diagnosis_text           VARCHAR(255) NULL,
+
+  -- 病名（第1〜第3を直書きスナップショット）
+  disease1_code            VARCHAR(32)  NULL,
+  disease1_name            VARCHAR(255) NULL,
+  disease2_code            VARCHAR(32)  NULL,
+  disease2_name            VARCHAR(255) NULL,
+  disease3_code            VARCHAR(32)  NULL,
+  disease3_name            VARCHAR(255) NULL,
+
+  -- 集計（閉帳時に確定）
+  total_b_points           INT UNSIGNED NOT NULL DEFAULT 0,
+  total_a_points           INT UNSIGNED NOT NULL DEFAULT 0,
+  total_price_yen          INT UNSIGNED NOT NULL DEFAULT 0,   -- 自費合計
+  subtotal_yen             INT UNSIGNED NOT NULL DEFAULT 0,   -- 点換算＋自費
+  patient_copay_yen        INT UNSIGNED NOT NULL DEFAULT 0,
+  insurer_pay_yen          INT UNSIGNED NOT NULL DEFAULT 0,
+  tax_yen                  INT UNSIGNED NOT NULL DEFAULT 0,
+
+  -- ステータス
+  status ENUM('draft','closed','issued','voided') NOT NULL DEFAULT 'draft',
+  closed_at                DATETIME NULL,
+  issued_at                DATETIME NULL,
+  printed_at               DATETIME NULL,
+  printed_count            INT UNSIGNED NOT NULL DEFAULT 0,
+
+  -- ▼ 農家スナップショット（farms 準拠）
+  farm_name                VARCHAR(255) NULL,
+  farm_address             VARCHAR(255) NULL,
+  farm_insurance_number    VARCHAR(64)  NULL,
+
+  -- ▼ 個体スナップショット（individuals 準拠）
+  animal_name              VARCHAR(255) NULL,
+  ear_tag                  VARCHAR(32)  NULL,
+  dam_name                 VARCHAR(255) NULL,
+  dam_ear_tag              VARCHAR(32)  NULL,
+  breed_code               VARCHAR(32)  NULL,
+  kyosai_purpose_code      VARCHAR(32)  NULL,  -- ※個体属性としてこちらに保持
+
+  -- ▼ 病院情報（自由形式）
+  clinic_snapshot_json     JSON NULL,
+
+  -- ▼ 保険加入スナップショット（insurance_enrollments 主要列）
+  ins_farm_user_id         INT UNSIGNED NULL,
+  ins_subscriber_code      CHAR(8) NULL,
+  ins_status               ENUM('加入','非加入','不明','下書き') NULL,
+  ins_start_date           DATE NULL,
+  ins_end_date             DATE NULL,
+  ins_fiscal_year          YEAR NULL,
+  ins_source_note          VARCHAR(255) NULL,
+
+  created_by               INT UNSIGNED NULL,
+  deleted_at               DATETIME NULL,
+  created_at               DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at               DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+  -- インデックス
+  INDEX idx_period     (fiscal_year, claim_month),
+  INDEX idx_status     (status),
+  INDEX idx_individual (individual_uuid),
+  INDEX idx_farm       (farm_uuid),
+  INDEX idx_outcome    (outcome_code),
+  INDEX idx_disease1   (disease1_code),
+  INDEX idx_disease2   (disease2_code),
+  INDEX idx_disease3   (disease3_code),
+
+  -- 外部キー
+  CONSTRAINT fk_ch_hdr_individual
+    FOREIGN KEY (individual_uuid) REFERENCES individuals(uuid)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_ch_hdr_farm
+    FOREIGN KEY (farm_uuid) REFERENCES farms(uuid)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_ch_hdr_ins
+    FOREIGN KEY (insurance_enrollment_id) REFERENCES insurance_enrollments(id)
+    ON UPDATE CASCADE ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 2) カルテ内「各回の診療」スナップ（checkups のコピー／親）
+CREATE TABLE IF NOT EXISTS chart_checkups (
+  id                   INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  uuid                 CHAR(36) NOT NULL UNIQUE,      -- スナップ側のcheckup-uuid
+  chart_uuid           CHAR(36) NOT NULL,             -- ↔ chart_headers.uuid
+  seq_no               INT UNSIGNED NOT NULL,         -- ヘッダ内の並び（日時昇順など）
+  source_checkup_uuid  CHAR(36) NOT NULL,             -- 元のcheckups.uuid
+  source_visit_uuid    CHAR(36) NULL,                 -- 任意：元のvisits.uuid
+
+  checkup_at           DATETIME NULL,                 -- 受診日時スナップ
+  -- SOAP/TPR/現症・経過（スナップ）
+  subjective_text      TEXT NULL,
+  objective_text       TEXT NULL,
+  assessment_text      TEXT NULL,
+  plan_text            TEXT NULL,
+  clinical_course_text TEXT NULL,
+  tpr_temp_c           DECIMAL(4,1) NULL,
+  tpr_pulse_bpm        SMALLINT UNSIGNED NULL,
+  tpr_resp_bpm         SMALLINT UNSIGNED NULL,
+
+  created_at           DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+  UNIQUE KEY uq_hdr_seq (chart_uuid, seq_no),
+  INDEX idx_hdr (chart_uuid),
+
+  CONSTRAINT fk_chart_checkups_header
+    FOREIGN KEY (chart_uuid) REFERENCES chart_headers(uuid)
+    ON UPDATE CASCADE ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 3) カルテ明細スナップ（checkup_items のコピー／子）※冗長なし＝ヘッダ列を持たない
+CREATE TABLE IF NOT EXISTS chart_items (
+  id                     INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  chart_checkup_uuid     CHAR(36) NOT NULL,             -- ↔ chart_checkups.uuid（親子）
+  within_checkup_line_no INT UNSIGNED NOT NULL,         -- 受診回内の行順
+
+  source_checkup_uuid    CHAR(36) NOT NULL,             -- 由来（監査用）
+  treatment_uuid         CHAR(36) NULL,                 -- 任意参照
+  description            VARCHAR(255) NOT NULL,
+
+  qty_unit               VARCHAR(32) NULL,
+  quantity               DECIMAL(10,2) NOT NULL DEFAULT 1,
+
+  pay_type               ENUM('insurance','private') NOT NULL,
+
+  unit_b_points          INT UNSIGNED NOT NULL DEFAULT 0,
+  unit_a_points          INT UNSIGNED NOT NULL DEFAULT 0,
+  subtotal_points        INT UNSIGNED NOT NULL DEFAULT 0,
+  yen_per_point          DECIMAL(8,2) NOT NULL DEFAULT 0.00,
+
+  unit_price_yen         INT UNSIGNED NOT NULL DEFAULT 0,
+  subtotal_price_yen     INT UNSIGNED NOT NULL DEFAULT 0,
+
+  tax_rate               DECIMAL(4,2) NOT NULL DEFAULT 0.00,
+  subtotal_yen           INT UNSIGNED NOT NULL DEFAULT 0,
+
+  created_at             DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+  INDEX idx_parent (chart_checkup_uuid, within_checkup_line_no),
+
+  CONSTRAINT fk_ci_cc
+    FOREIGN KEY (chart_checkup_uuid) REFERENCES chart_checkups(uuid)
+    ON UPDATE CASCADE ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 4) 原本：checkups（カルテ接続・対象外・SOAP/TPR）
+CREATE TABLE IF NOT EXISTS checkups (
+  id                     INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  uuid                   CHAR(36) NOT NULL UNIQUE,
+
+  visit_uuid             CHAR(36) NOT NULL,        -- ↔ visits.uuid
+  individual_uuid        CHAR(36) NOT NULL,        -- ↔ individuals.uuid
+
+  chart_header_uuid      CHAR(36) NULL,            -- 未接続=NULL
+  claim_exclusion        ENUM('none','no_insurance','manual') NOT NULL DEFAULT 'none',
+  has_insurance_cached   TINYINT(1) NOT NULL DEFAULT 0,
+
+  -- SOAP
+  subjective_text        TEXT NULL,
+  objective_text         TEXT NULL,
+  assessment_text        TEXT NULL,
+  plan_text              TEXT NULL,
+
+  -- TPR
+  tpr_temp_c             DECIMAL(4,1) NULL,
+  tpr_pulse_bpm          SMALLINT UNSIGNED NULL,
+  tpr_resp_bpm           SMALLINT UNSIGNED NULL,
+
+  clinical_course_text   TEXT NULL,                -- 現症・経過
+  status                 ENUM('draft','ready') NOT NULL DEFAULT 'draft',
+
+  created_by             INT UNSIGNED NULL,
+  deleted_at             DATETIME NULL,
+  created_at             DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at             DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+  UNIQUE KEY uq_visit_individual (visit_uuid, individual_uuid),
+  INDEX idx_individual (individual_uuid),
+  INDEX idx_claim (chart_header_uuid, claim_exclusion, has_insurance_cached, individual_uuid),
+
+  CONSTRAINT fk_cu_visit
+    FOREIGN KEY (visit_uuid) REFERENCES visits(uuid)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_cu_individual
+    FOREIGN KEY (individual_uuid) REFERENCES individuals(uuid)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_cu_chart_header
+    FOREIGN KEY (chart_header_uuid) REFERENCES chart_headers(uuid)
+    ON UPDATE CASCADE ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 5) 原本：checkup_items（v1p2互換・pay_typeを'insurance'/'private'で統一）
+CREATE TABLE IF NOT EXISTS checkup_items (
+  id                     INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  uuid                   CHAR(36) NOT NULL UNIQUE,
+  checkup_uuid           CHAR(36) NOT NULL,        -- ↔ checkups.uuid
+  treatment_uuid         CHAR(36) NULL,
+  description            VARCHAR(255) NOT NULL,
+
+  qty_unit               VARCHAR(32) NULL,
+  quantity               DECIMAL(10,2) NOT NULL DEFAULT 1,
+
+  pay_type               ENUM('insurance','private') NOT NULL,
+
+  unit_b_points          INT UNSIGNED NOT NULL DEFAULT 0,
+  unit_a_points          INT UNSIGNED NOT NULL DEFAULT 0,
+  subtotal_points        INT UNSIGNED NOT NULL DEFAULT 0,
+  yen_per_point          DECIMAL(8,2) NOT NULL DEFAULT 0.00,
+
+  unit_price_yen         INT UNSIGNED NOT NULL DEFAULT 0,
+  subtotal_price_yen     INT UNSIGNED NOT NULL DEFAULT 0,
+
+  tax_rate               DECIMAL(4,2) NOT NULL DEFAULT 0.00,
+  subtotal_yen           INT UNSIGNED NOT NULL DEFAULT 0,
+
+  deleted_at             DATETIME NULL,
+  created_at             DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at             DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+  INDEX idx_items (checkup_uuid, pay_type),
+  CONSTRAINT fk_ci_checkup
+    FOREIGN KEY (checkup_uuid) REFERENCES checkups(uuid)
+    ON UPDATE CASCADE ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+<<<END patches/checkups_desease_chart_p6.1.sql>>>
+
+<<<FILE patches/checkups_p012.1.sql>>>
+/* ============================================================
+  checkups — BINARY(16) 版（MariaDB 10.5）／クライアント32桁hex・API境界のみ変換
+
+  ■方針
+    - クライアント（PWA）は UUID を **32桁hex（小文字、ダッシュ無し）** で扱う。
+    - APIでは受信時に **UNHEX(…)=BINARY(16)** へ、返却時は **LOWER(HEX(…))** へ変換。
+    - DBはすべて **BINARY(16)** で保存し、JOIN/索引/容量を最適化。
+    - UUID未指定（クライアント発番できない）時は、**DBトリガが v7 を自動付与**。
+    - GUIの可読用途は **ビュー** で提供（本体テーブルはクリーンを維持）。
+
+  ■カラム/外部キー
+    - `uuid` / `visit_uuid` / `individual_uuid` / `chart_header_uuid` は **BINARY(16)**。
+    - `visits` / `individuals` / `chart_headers` 側の `uuid` も **BINARY(16) + UNIQUE** 前提。
+    - （旧コメント）訪問のFK名は要望どおり **fk_visit_uuid1**。
+    - （修正）FK命名規則に合わせ **fk_checkups_visit_uuid** に統一。
+
+  ■文字コード（整合性）
+    - 本テーブルは **DEFAULT CHARSET = utf8mb4, COLLATE = utf8mb4_unicode_ci** を明示。
+    - アプリ内の他テーブルも **同一** に統一（混在は JOIN/比較で不具合の元）。
+      例: ALTER DATABASE your_db CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+  ■API境界の使い方（例）
+    - 受信: 32桁hex → `UNHEX(:uuid_hex)` で渡す（未指定なら NULL）
+    - 返却: `SELECT LOWER(HEX(uuid)) AS uuid_hex ...`
+
+  ■備考
+    - レプリケーションは、関数で RAND() を使うため **ROWベース**推奨。
+    - 親行はすでに存在していること（**親→子の順でINSERT**）。
+============================================================ */
+
+-- ========== ユーティリティ関数（hex⇄bin, v7生成） ==========
+DELIMITER $$
+
+DROP FUNCTION IF EXISTS uuid_bin_to_hex $$
+CREATE FUNCTION uuid_bin_to_hex(b BINARY(16))
+RETURNS CHAR(32)
+DETERMINISTIC
+BEGIN
+  RETURN LOWER(HEX(b));
+END$$
+
+DROP FUNCTION IF EXISTS uuid_hex_to_bin $$
+CREATE FUNCTION uuid_hex_to_bin(s VARCHAR(36))
+RETURNS BINARY(16)
+DETERMINISTIC
+BEGIN
+  -- PWAは 32桁hex を送る前提だが、ダッシュ付きを混ぜても受けられるように REPLACE
+  RETURN UNHEX(REPLACE(LOWER(s), '-', ''));
+END$$
+
+DROP FUNCTION IF EXISTS uuid_v7_str $$
+CREATE FUNCTION uuid_v7_str()
+RETURNS CHAR(36)
+NOT DETERMINISTIC
+BEGIN
+  DECLARE ts_ms BIGINT UNSIGNED;  DECLARE ts_hex CHAR(12);
+  DECLARE r12 INT UNSIGNED;       DECLARE ver_hi CHAR(4);
+  DECLARE var_hi CHAR(4);         DECLARE tail CHAR(12);
+  DECLARE t_hi CHAR(8);           DECLARE t_mid CHAR(4);
+
+  SET ts_ms  = CAST(ROUND(UNIX_TIMESTAMP(CURRENT_TIMESTAMP(3))*1000) AS UNSIGNED);
+  SET ts_hex = LPAD(HEX(ts_ms),12,'0');
+
+  SET r12    = FLOOR(RAND()*POW(2,12));
+  SET ver_hi = CONCAT('7', LPAD(HEX(r12),3,'0'));
+  SET var_hi = CONCAT(ELT(FLOOR(RAND()*4)+1,'8','9','a','b'),
+                      LPAD(HEX(FLOOR(RAND()*POW(2,12))),3,'0'));
+  SET tail   = LPAD(HEX(FLOOR(RAND()*POW(2,48))),12,'0');
+
+  SET t_hi  = LEFT(ts_hex,8);
+  SET t_mid = SUBSTRING(ts_hex,9,4);
+
+  RETURN LOWER(CONCAT(t_hi,'-',t_mid,'-',ver_hi,'-',var_hi,'-',tail));
+END$$
+
+DROP FUNCTION IF EXISTS uuid_v7_bin $$
+CREATE FUNCTION uuid_v7_bin()
+RETURNS BINARY(16)
+NOT DETERMINISTIC
+BEGIN
+  RETURN uuid_hex_to_bin(uuid_v7_str());
+END$$
+
+DELIMITER ;
+
+-- ========== 再デプロイ安全化 ==========
+DROP TRIGGER IF EXISTS tr_checkups_bi_uuid_v7;
+DROP VIEW IF EXISTS checkups_hex_v;
+DROP TABLE IF EXISTS checkups;
+
+-- ========== 本体テーブル ==========
+CREATE TABLE IF NOT EXISTS checkups (
+  id                     INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+
+  -- 主キー相当の一意UUID（BINARY16）
+  uuid                   BINARY(16) NOT NULL UNIQUE,
+
+  -- 親FK（BINARY16）
+  visit_uuid             BINARY(16) NOT NULL,      -- ↔ visits.uuid
+  individual_uuid        BINARY(16) NOT NULL,      -- ↔ individuals.uuid
+  chart_header_uuid      BINARY(16) NULL,          -- ↔ chart_headers.uuid
+
+  -- SOAP（p1命名）
+  s_subjective           TEXT NULL,
+  o_objective            TEXT NULL,
+  a_assessment           TEXT NULL,
+  p_plan                 TEXT NULL,
+
+  -- TPR（p1命名）
+  temp_c                 DECIMAL(4,1) NULL,        -- 体温[℃]
+  pulse_bpm              SMALLINT UNSIGNED NULL,   -- 脈拍[bpm]
+  resp_bpm               SMALLINT UNSIGNED NULL,   -- 呼吸[bpm]
+
+  -- 現症・経過
+  clinical_course        TEXT NULL,
+
+  -- 請求/運用（#2系）
+  claim_exclusion        ENUM('none','no_insurance','manual') NOT NULL DEFAULT 'none',
+  has_insurance_cached   TINYINT(1) NOT NULL DEFAULT 0,
+
+  status                 ENUM('draft','ready') NOT NULL DEFAULT 'draft',
+
+  created_by             INT UNSIGNED NULL,
+  deleted_at             DATETIME NULL,
+
+  created_at             DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at             DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+  -- 制約・索引
+  -- （旧コメント）UNIQUE KEY uq_checkups_visit_individual (visit_uuid, individual_uuid),
+  -- （修正）同一 visit×individual で複数の checkups を許可するため UNIQUE を撤去。
+  --         代替として探索用の複合インデックスを追加（下記）。
+
+  INDEX idx_checkups_visit (visit_uuid),
+  INDEX idx_checkups_individual (individual_uuid),
+
+  -- ▼追加：探索・並び用の複合インデックス（どちらか/両方運用可）
+  INDEX idx_checkups_visit_individual_created (visit_uuid, individual_uuid, created_at),
+  INDEX idx_checkups_visit_individual_uuid    (visit_uuid, individual_uuid, uuid),
+
+  INDEX idx_claim (chart_header_uuid, claim_exclusion, has_insurance_cached, individual_uuid),
+
+  -- 外部キー（命名規則を統一）
+  CONSTRAINT fk_checkups_visit_uuid
+    FOREIGN KEY (visit_uuid) REFERENCES visits(uuid)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+
+  CONSTRAINT fk_checkups_individual_uuid
+    FOREIGN KEY (individual_uuid) REFERENCES individuals(uuid)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+
+  CONSTRAINT fk_checkups_chart_header_uuid
+    FOREIGN KEY (chart_header_uuid) REFERENCES chart_headers(uuid)
+    ON UPDATE CASCADE ON DELETE SET NULL
+) ENGINE=InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COLLATE = utf8mb4_unicode_ci;
+
+-- ========== BEFORE INSERT: uuid 未指定なら DB が v7 を自動付与 ==========
+DELIMITER $$
+CREATE TRIGGER tr_checkups_bi_uuid_v7
+BEFORE INSERT ON checkups
+FOR EACH ROW
+BEGIN
+  -- アプリが uuid を送らない/NULL の場合のみ自動採番（v7, BINARY16）
+  IF NEW.uuid IS NULL OR LENGTH(NEW.uuid) = 0 THEN
+    SET NEW.uuid = uuid_v7_bin();
+  END IF;
+END$$
+DELIMITER ;
+
+-- 5) checkup_items（p012準拠）
+CREATE TABLE IF NOT EXISTS checkup_items (
+  id                     INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  uuid                   BINARY(16) NOT NULL UNIQUE,
+  checkup_uuid           BINARY(16) NOT NULL,            -- ↔ checkups.uuid
+  treatment_uuid         BINARY(16) NULL,                -- 任意参照
+  description            VARCHAR(255) NOT NULL,
+
+  qty_unit               VARCHAR(32) NULL,
+  quantity               DECIMAL(10,2) NOT NULL DEFAULT 1,
+
+  pay_type               ENUM('insurance','private') NOT NULL,
+
+  unit_b_points          INT UNSIGNED NOT NULL DEFAULT 0,
+  unit_a_points          INT UNSIGNED NOT NULL DEFAULT 0,
+  subtotal_points        INT UNSIGNED NOT NULL DEFAULT 0,
+  yen_per_point          DECIMAL(8,2) NOT NULL DEFAULT 0.00,
+
+  unit_price_yen         INT UNSIGNED NOT NULL DEFAULT 0,
+  subtotal_price_yen     INT UNSIGNED NOT NULL DEFAULT 0,
+
+  tax_rate               DECIMAL(4,2) NOT NULL DEFAULT 0.00,
+  subtotal_yen           INT UNSIGNED NOT NULL DEFAULT 0,
+
+  deleted_at             DATETIME NULL,
+  created_at             DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at             DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+  INDEX idx_checkup_items_parent (checkup_uuid, pay_type),
+
+  CONSTRAINT fk_checkup_items_checkup
+    FOREIGN KEY (checkup_uuid) REFERENCES checkups(uuid)
+    ON UPDATE CASCADE ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+DELIMITER $$
+CREATE TRIGGER tr_checkup_items_bi_uuid_v7
+BEFORE INSERT ON checkup_items
+FOR EACH ROW
+BEGIN
+  IF NEW.uuid IS NULL OR LENGTH(NEW.uuid) = 0 THEN
+    SET NEW.uuid = uuid_v7_bin();
+  END IF;
+END $$
+DELIMITER ;
+
+-- ========== 管理・デバッグ用ビュー（返却時にhex文字列で見たい時） ==========
+/*
+  本番アプリはBINARY16を直接扱い、返却時に HEX() で文字列化すればよい。
+  ただし、GUI/手検証で可読にしたい場合はこのビューを使う。
+  ※本体テーブルはクリーンのまま（生成列など付けない）。
+*/
+CREATE OR REPLACE VIEW checkups_hex_v AS
+SELECT
+  id,
+  uuid_bin_to_hex(uuid)              AS uuid_hex,
+  uuid_bin_to_hex(visit_uuid)        AS visit_uuid_hex,
+  uuid_bin_to_hex(individual_uuid)   AS individual_uuid_hex,
+  uuid_bin_to_hex(chart_header_uuid) AS chart_header_uuid_hex,
+  s_subjective, o_objective, a_assessment, p_plan,
+  temp_c, pulse_bpm, resp_bpm, clinical_course,
+  claim_exclusion, has_insurance_cached, status,
+  created_by, deleted_at, created_at, updated_at
+FROM checkups;
+<<<END patches/checkups_p012.1.sql>>>
+
+<<<FILE patches/checkups_p012.2.sql>>>
+/* =========================================================
+   checkups / checkup_items — p012.1 準拠＋指定4点のみ適用
+   変更点:
+     1) row_version 追加（両テーブル）
+     2) list index 追加（(deleted_at, updated_at, id)）
+     3) ゼロUUID混入防止（0x00.. → 自動採番）
+     4) ROW_FORMAT=DYNAMIC 明示
+   ポリシー変更:
+     - checkups.chart_header_uuid は弱いリンク（FKなし、索引のみ）
+   ========================================================= */
+
+/* ========== ユーティリティ関数（p012.1 そのまま） ========== */
+DELIMITER $$
+DROP FUNCTION IF EXISTS uuid_bin_to_hex $$
+CREATE FUNCTION uuid_bin_to_hex(b BINARY(16)) RETURNS CHAR(32) DETERMINISTIC
+BEGIN
+  RETURN LOWER(HEX(b));
+END$$
+
+DROP FUNCTION IF EXISTS uuid_hex_to_bin $$
+CREATE FUNCTION uuid_hex_to_bin(s VARCHAR(36)) RETURNS BINARY(16) DETERMINISTIC
+BEGIN
+  -- ダッシュ混在も受容
+  RETURN UNHEX(REPLACE(LOWER(s), '-', ''));
+END$$
+
+DROP FUNCTION IF EXISTS uuid_v7_str $$
+CREATE FUNCTION uuid_v7_str() RETURNS CHAR(36) NOT DETERMINISTIC
+BEGIN
+  DECLARE ts_ms BIGINT UNSIGNED;
+  DECLARE ts_hex CHAR(12);
+  DECLARE r12 INT UNSIGNED;
+  DECLARE ver_hi CHAR(4);
+  DECLARE var_hi CHAR(4);
+  DECLARE tail CHAR(12);
+  DECLARE t_hi CHAR(8);
+  DECLARE t_mid CHAR(4);
+
+  SET ts_ms = CAST(ROUND(UNIX_TIMESTAMP(CURRENT_TIMESTAMP(3))*1000) AS UNSIGNED);
+  SET ts_hex = LPAD(HEX(ts_ms),12,'0');
+
+  SET r12 = FLOOR(RAND()*POW(2,12));
+  SET ver_hi = CONCAT('7', LPAD(HEX(r12),3,'0'));
+  SET var_hi = CONCAT(ELT(FLOOR(RAND()*4)+1,'8','9','a','b'),
+                      LPAD(HEX(FLOOR(RAND()*POW(2,12))),3,'0'));
+  SET tail = LPAD(HEX(FLOOR(RAND()*POW(2,48))),12,'0');
+
+  SET t_hi  = LEFT(ts_hex,8);
+  SET t_mid = SUBSTRING(ts_hex,9,4);
+
+  RETURN LOWER(CONCAT(t_hi,'-',t_mid,'-',ver_hi,'-',var_hi,'-',tail));
+END$$
+
+DROP FUNCTION IF EXISTS uuid_v7_bin $$
+CREATE FUNCTION uuid_v7_bin() RETURNS BINARY(16) NOT DETERMINISTIC
+BEGIN
+  RETURN uuid_hex_to_bin(uuid_v7_str());
+END$$
+DELIMITER ;
+
+/* ========== 再デプロイ安全化 ========== */
+DROP TRIGGER IF EXISTS tr_checkups_bi_uuid_v7;
+DROP TRIGGER IF EXISTS tr_checkups_bu_rowver;
+DROP VIEW    IF EXISTS checkups_hex_v;
+DROP TABLE   IF EXISTS checkup_items;
+DROP TABLE   IF EXISTS checkups;
+
+/* ========== 本体テーブル：checkups（p012.1＋4点｜弱リンク） ========== */
+CREATE TABLE IF NOT EXISTS checkups (
+  id                INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+
+  -- 主キー相当の一意UUID（BINARY16）
+  uuid              BINARY(16) NOT NULL UNIQUE,
+
+  -- 親（BINARY16）
+  visit_uuid        BINARY(16) NOT NULL,   -- ↔ visits.uuid
+  individual_uuid   BINARY(16) NOT NULL,   -- ↔ individuals.uuid
+  chart_header_uuid BINARY(16) NULL,       -- スナップへの弱リンク（FKなし）
+
+  -- SOAP（p012.1 命名）
+  s_subjective      TEXT NULL,
+  o_objective       TEXT NULL,
+  a_assessment      TEXT NULL,
+  p_plan            TEXT NULL,
+
+  -- TPR（p012.1 命名）
+  temp_c            DECIMAL(4,1) NULL,           -- 体温[℃]
+  pulse_bpm         SMALLINT UNSIGNED NULL,      -- 脈拍[bpm]
+  resp_bpm          SMALLINT UNSIGNED NULL,      -- 呼吸[bpm]
+
+  -- 現症・経過
+  clinical_course   TEXT NULL,
+
+  -- 請求/運用（p012.1）
+  claim_exclusion       ENUM('none','no_insurance','manual') NOT NULL DEFAULT 'none',
+  has_insurance_cached  TINYINT(1) NOT NULL DEFAULT 0,
+  status                ENUM('draft','ready') NOT NULL DEFAULT 'draft',
+  created_by            INT UNSIGNED NULL,
+
+  /* 追加1) row_version */
+  row_version       BIGINT UNSIGNED NOT NULL DEFAULT 1,
+
+  deleted_at        DATETIME NULL,
+  created_at        DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at        DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+  -- 索引（p012.1 既存＋弱リンク用の単一列索引を追加）
+  INDEX idx_checkups_visit (visit_uuid),
+  INDEX idx_checkups_individual (individual_uuid),
+  INDEX idx_checkups_visit_individual_created (visit_uuid, individual_uuid, created_at),
+  INDEX idx_checkups_visit_individual_uuid    (visit_uuid, individual_uuid, uuid),
+  INDEX idx_claim (chart_header_uuid, claim_exclusion, has_insurance_cached, individual_uuid),
+  INDEX idx_checkups_chart_header (chart_header_uuid),  -- ★弱リンク用の単一列索引
+
+  /* 追加2) list index */
+  KEY   idx_checkups_list (deleted_at, updated_at, id),
+
+  -- 外部キー（chart_header_uuid 以外は従来通り）
+  CONSTRAINT fk_checkups_visit_uuid
+    FOREIGN KEY (visit_uuid)      REFERENCES visits(uuid)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_checkups_individual_uuid
+    FOREIGN KEY (individual_uuid) REFERENCES individuals(uuid)
+    ON UPDATE CASCADE ON DELETE RESTRICT
+
+  -- ★chart_header_uuid へのFKは張らない（弱リンク）
+) ENGINE=InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci ROW_FORMAT=DYNAMIC;
+
+/* ========== BEFORE INSERT: uuid 未指定/ゼロなら v7 自動付与（変更点3） ========== */
+DELIMITER $$
+CREATE TRIGGER tr_checkups_bi_uuid_v7
+BEFORE INSERT ON checkups
+FOR EACH ROW
+BEGIN
+  IF NEW.uuid IS NULL OR NEW.uuid = UNHEX(REPEAT('0',32)) THEN
+    SET NEW.uuid = uuid_v7_bin();
+  END IF;
+END$$
+
+/* ========== BEFORE UPDATE: row_version 自動インクリメント（変更点1） ========== */
+CREATE TRIGGER tr_checkups_bu_rowver
+BEFORE UPDATE ON checkups
+FOR EACH ROW
+BEGIN
+  SET NEW.row_version = OLD.row_version + 1;
+END$$
+DELIMITER ;
+
+/* ========== 明細テーブル：checkup_items（p012.1＋4点） ========== */
+CREATE TABLE IF NOT EXISTS checkup_items (
+  id                   INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  uuid                 BINARY(16) NOT NULL UNIQUE,
+
+  checkup_uuid         BINARY(16) NOT NULL,  -- ↔ checkups.uuid
+  treatment_uuid       BINARY(16) NULL,      -- 任意参照
+
+  description          VARCHAR(255) NOT NULL,
+  qty_unit             VARCHAR(32) NULL,
+  quantity             DECIMAL(10,2) NOT NULL DEFAULT 1,
+
+  pay_type             ENUM('insurance','private') NOT NULL,
+
+  unit_b_points        INT UNSIGNED NOT NULL DEFAULT 0,
+  unit_a_points        INT UNSIGNED NOT NULL DEFAULT 0,
+  subtotal_points      INT UNSIGNED NOT NULL DEFAULT 0,
+  yen_per_point        DECIMAL(8,2) NOT NULL DEFAULT 0.00,
+
+  unit_price_yen       INT UNSIGNED NOT NULL DEFAULT 0,
+  subtotal_price_yen   INT UNSIGNED NOT NULL DEFAULT 0,
+
+  tax_rate             DECIMAL(4,2) NOT NULL DEFAULT 0.00,
+  subtotal_yen         INT UNSIGNED NOT NULL DEFAULT 0,
+
+  /* 追加1) row_version */
+  row_version          BIGINT UNSIGNED NOT NULL DEFAULT 1,
+
+  deleted_at           DATETIME NULL,
+  created_at           DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at           DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+  INDEX idx_checkup_items_parent (checkup_uuid, pay_type),
+
+  /* 追加2) list index */
+  KEY   idx_checkup_items_list (deleted_at, updated_at, id),
+
+  CONSTRAINT fk_checkup_items_checkup
+    FOREIGN KEY (checkup_uuid) REFERENCES checkups(uuid)
+    ON UPDATE CASCADE ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci ROW_FORMAT=DYNAMIC;
+
+DELIMITER $$
+/* ========== BEFORE INSERT: uuid 未指定/ゼロなら v7 自動付与（変更点3） ========== */
+CREATE TRIGGER tr_checkup_items_bi_uuid_v7
+BEFORE INSERT ON checkup_items
+FOR EACH ROW
+BEGIN
+  IF NEW.uuid IS NULL OR NEW.uuid = UNHEX(REPEAT('0',32)) THEN
+    SET NEW.uuid = uuid_v7_bin();
+  END IF;
+END$$
+
+/* ========== BEFORE UPDATE: row_version 自動インクリメント（変更点1） ========== */
+CREATE TRIGGER tr_checkup_items_bu_rowver
+BEFORE UPDATE ON checkup_items
+FOR EACH ROW
+BEGIN
+  SET NEW.row_version = OLD.row_version + 1;
+END$$
+DELIMITER ;
+
+/* ========== 可読ビュー（p012.1 そのまま） ========== */
+CREATE OR REPLACE VIEW checkups_hex_v AS
+SELECT
+  id,
+  uuid_bin_to_hex(uuid)              AS uuid_hex,
+  uuid_bin_to_hex(visit_uuid)        AS visit_uuid_hex,
+  uuid_bin_to_hex(individual_uuid)   AS individual_uuid_hex,
+  uuid_bin_to_hex(chart_header_uuid) AS chart_header_uuid_hex,
+  s_subjective, o_objective, a_assessment, p_plan,
+  temp_c, pulse_bpm, resp_bpm,
+  clinical_course,
+  claim_exclusion, has_insurance_cached, status, created_by,
+  deleted_at, created_at, updated_at
+FROM checkups;
+<<<END patches/checkups_p012.2.sql>>>
+
+<<<FILE patches/checkups_p012.sql>>>
+/* ============================================================
+  checkups — BINARY(16) 版（MariaDB 10.5）／クライアント32桁hex・API境界のみ変換
+
+  ■方針
+    - クライアント（PWA）は UUID を **32桁hex（小文字、ダッシュ無し）** で扱う。
+    - APIでは受信時に **UNHEX(…)=BINARY(16)** へ、返却時は **LOWER(HEX(…))** へ変換。
+    - DBはすべて **BINARY(16)** で保存し、JOIN/索引/容量を最適化。
+    - UUID未指定（クライアント発番できない）時は、**DBトリガが v7 を自動付与**。
+    - GUIの可読用途は **ビュー** で提供（本体テーブルはクリーンを維持）。
+
+  ■カラム/外部キー
+    - `uuid` / `visit_uuid` / `individual_uuid` / `chart_header_uuid` は **BINARY(16)**。
+    - `visits` / `individuals` / `chart_headers` 側の `uuid` も **BINARY(16) + UNIQUE** 前提。
+    - （旧コメント）訪問のFK名は要望どおり **fk_visit_uuid1**。
+    - （修正）FK命名規則に合わせ **fk_checkups_visit_uuid** に統一。
+
+  ■文字コード（整合性）
+    - 本テーブルは **DEFAULT CHARSET = utf8mb4, COLLATE = utf8mb4_unicode_ci** を明示。
+    - アプリ内の他テーブルも **同一** に統一（混在は JOIN/比較で不具合の元）。
+      例: ALTER DATABASE your_db CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+  ■API境界の使い方（例）
+    - 受信: 32桁hex → `UNHEX(:uuid_hex)` で渡す（未指定なら NULL）
+    - 返却: `SELECT LOWER(HEX(uuid)) AS uuid_hex ...`
+
+  ■備考
+    - レプリケーションは、関数で RAND() を使うため **ROWベース**推奨。
+    - 親行はすでに存在していること（**親→子の順でINSERT**）。
+============================================================ */
+
+-- ========== ユーティリティ関数（hex⇄bin, v7生成） ==========
+DELIMITER $$
+
+DROP FUNCTION IF EXISTS uuid_bin_to_hex $$
+CREATE FUNCTION uuid_bin_to_hex(b BINARY(16))
+RETURNS CHAR(32)
+DETERMINISTIC
+BEGIN
+  RETURN LOWER(HEX(b));
+END$$
+
+DROP FUNCTION IF EXISTS uuid_hex_to_bin $$
+CREATE FUNCTION uuid_hex_to_bin(s VARCHAR(36))
+RETURNS BINARY(16)
+DETERMINISTIC
+BEGIN
+  -- PWAは 32桁hex を送る前提だが、ダッシュ付きを混ぜても受けられるように REPLACE
+  RETURN UNHEX(REPLACE(LOWER(s), '-', ''));
+END$$
+
+DROP FUNCTION IF EXISTS uuid_v7_str $$
+CREATE FUNCTION uuid_v7_str()
+RETURNS CHAR(36)
+NOT DETERMINISTIC
+BEGIN
+  DECLARE ts_ms BIGINT UNSIGNED;  DECLARE ts_hex CHAR(12);
+  DECLARE r12 INT UNSIGNED;       DECLARE ver_hi CHAR(4);
+  DECLARE var_hi CHAR(4);         DECLARE tail CHAR(12);
+  DECLARE t_hi CHAR(8);           DECLARE t_mid CHAR(4);
+
+  SET ts_ms  = CAST(ROUND(UNIX_TIMESTAMP(CURRENT_TIMESTAMP(3))*1000) AS UNSIGNED);
+  SET ts_hex = LPAD(HEX(ts_ms),12,'0');
+
+  SET r12    = FLOOR(RAND()*POW(2,12));
+  SET ver_hi = CONCAT('7', LPAD(HEX(r12),3,'0'));
+  SET var_hi = CONCAT(ELT(FLOOR(RAND()*4)+1,'8','9','a','b'),
+                      LPAD(HEX(FLOOR(RAND()*POW(2,12))),3,'0'));
+  SET tail   = LPAD(HEX(FLOOR(RAND()*POW(2,48))),12,'0');
+
+  SET t_hi  = LEFT(ts_hex,8);
+  SET t_mid = SUBSTRING(ts_hex,9,4);
+
+  RETURN LOWER(CONCAT(t_hi,'-',t_mid,'-',ver_hi,'-',var_hi,'-',tail));
+END$$
+
+DROP FUNCTION IF EXISTS uuid_v7_bin $$
+CREATE FUNCTION uuid_v7_bin()
+RETURNS BINARY(16)
+NOT DETERMINISTIC
+BEGIN
+  RETURN uuid_hex_to_bin(uuid_v7_str());
+END$$
+
+DELIMITER ;
+
+-- ========== 再デプロイ安全化 ==========
+DROP TRIGGER IF EXISTS tr_checkups_bi_uuid_v7;
+DROP VIEW IF EXISTS checkups_hex_v;
+DROP TABLE IF EXISTS checkups;
+
+-- ========== 本体テーブル ==========
+CREATE TABLE IF NOT EXISTS checkups (
+  id                     INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+
+  -- 主キー相当の一意UUID（BINARY16）
+  uuid                   BINARY(16) NOT NULL UNIQUE,
+
+  -- 親FK（BINARY16）
+  visit_uuid             BINARY(16) NOT NULL,      -- ↔ visits.uuid
+  individual_uuid        BINARY(16) NOT NULL,      -- ↔ individuals.uuid
+  chart_header_uuid      BINARY(16) NULL,          -- ↔ chart_headers.uuid
+
+  -- SOAP（p1命名）
+  s_subjective           TEXT NULL,
+  o_objective            TEXT NULL,
+  a_assessment           TEXT NULL,
+  p_plan                 TEXT NULL,
+
+  -- TPR（p1命名）
+  temp_c                 DECIMAL(4,1) NULL,        -- 体温[℃]
+  pulse_bpm              SMALLINT UNSIGNED NULL,   -- 脈拍[bpm]
+  resp_bpm               SMALLINT UNSIGNED NULL,   -- 呼吸[bpm]
+
+  -- 現症・経過
+  clinical_course        TEXT NULL,
+
+  -- 請求/運用（#2系）
+  claim_exclusion        ENUM('none','no_insurance','manual') NOT NULL DEFAULT 'none',
+  has_insurance_cached   TINYINT(1) NOT NULL DEFAULT 0,
+
+  status                 ENUM('draft','ready') NOT NULL DEFAULT 'draft',
+
+  created_by             INT UNSIGNED NULL,
+  deleted_at             DATETIME NULL,
+
+  created_at             DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at             DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+  -- 制約・索引
+  -- （旧コメント）UNIQUE KEY uq_checkups_visit_individual (visit_uuid, individual_uuid),
+  -- （修正）同一 visit×individual で複数の checkups を許可するため UNIQUE を撤去。
+  --         代替として探索用の複合インデックスを追加（下記）。
+
+  INDEX idx_checkups_visit (visit_uuid),
+  INDEX idx_checkups_individual (individual_uuid),
+
+  -- ▼追加：探索・並び用の複合インデックス（どちらか/両方運用可）
+  INDEX idx_checkups_visit_individual_created (visit_uuid, individual_uuid, created_at),
+  INDEX idx_checkups_visit_individual_uuid    (visit_uuid, individual_uuid, uuid),
+
+  INDEX idx_claim (chart_header_uuid, claim_exclusion, has_insurance_cached, individual_uuid),
+
+  -- 外部キー（命名規則を統一）
+  CONSTRAINT fk_checkups_visit_uuid
+    FOREIGN KEY (visit_uuid) REFERENCES visits(uuid)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+
+  CONSTRAINT fk_checkups_individual_uuid
+    FOREIGN KEY (individual_uuid) REFERENCES individuals(uuid)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+
+  CONSTRAINT fk_checkups_chart_header_uuid
+    FOREIGN KEY (chart_header_uuid) REFERENCES chart_headers(uuid)
+    ON UPDATE CASCADE ON DELETE SET NULL
+) ENGINE=InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COLLATE = utf8mb4_unicode_ci;
+
+-- ========== BEFORE INSERT: uuid 未指定なら DB が v7 を自動付与 ==========
+DELIMITER $$
+CREATE TRIGGER tr_checkups_bi_uuid_v7
+BEFORE INSERT ON checkups
+FOR EACH ROW
+BEGIN
+  -- アプリが uuid を送らない/NULL の場合のみ自動採番（v7, BINARY16）
+  IF NEW.uuid IS NULL OR LENGTH(NEW.uuid) = 0 THEN
+    SET NEW.uuid = uuid_v7_bin();
+  END IF;
+END$$
+DELIMITER ;
+
+-- ========== 管理・デバッグ用ビュー（返却時にhex文字列で見たい時） ==========
+/*
+  本番アプリはBINARY16を直接扱い、返却時に HEX() で文字列化すればよい。
+  ただし、GUI/手検証で可読にしたい場合はこのビューを使う。
+  ※本体テーブルはクリーンのまま（生成列など付けない）。
+*/
+CREATE OR REPLACE VIEW checkups_hex_v AS
+SELECT
+  id,
+  uuid_bin_to_hex(uuid)              AS uuid_hex,
+  uuid_bin_to_hex(visit_uuid)        AS visit_uuid_hex,
+  uuid_bin_to_hex(individual_uuid)   AS individual_uuid_hex,
+  uuid_bin_to_hex(chart_header_uuid) AS chart_header_uuid_hex,
+  s_subjective, o_objective, a_assessment, p_plan,
+  temp_c, pulse_bpm, resp_bpm, clinical_course,
+  claim_exclusion, has_insurance_cached, status,
+  created_by, deleted_at, created_at, updated_at
+FROM checkups;
+<<<END patches/checkups_p012.sql>>>
+
+<<<FILE patches/checkups_p1_itd012.sql>>>
+  -- SOAP カラム追加
+
+CREATE TABLE IF NOT EXISTS checkups (
+  id               INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  uuid             CHAR(36) NOT NULL UNIQUE,
+  visit_uuid       CHAR(36) NOT NULL,              -- ↔ visits.uuid
+  individual_uuid  CHAR(36) NOT NULL,              -- ↔ individuals.uuid
+
+  -- SOAP fields
+  s_subjective     TEXT NULL COMMENT 'S: Subjective (owner-reported signs, history)',
+  o_objective      TEXT NULL COMMENT 'O: Objective (exam findings, labs, imaging)',
+  a_assessment     TEXT NULL COMMENT 'A: Assessment / differential & working dx',
+  p_plan           TEXT NULL COMMENT 'P: Plan / therapy / next steps',
+
+  -- TPR (vital signs)
+  temp_c           DECIMAL(4,1) NULL COMMENT 'TPR: Temperature (°C)',
+  pulse_bpm        SMALLINT UNSIGNED NULL COMMENT 'TPR: Pulse (beats/min)',
+  resp_bpm         SMALLINT UNSIGNED NULL COMMENT 'TPR: Respiratory rate (breaths/min)',
+
+  -- 現症・経過
+  clinical_course  TEXT NULL COMMENT 'Clinical course / current condition',
+
+  status           ENUM('draft','ready') NOT NULL DEFAULT 'draft',
+  created_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+  UNIQUE KEY uq_checkups_visit_individual (visit_uuid, individual_uuid),
+  INDEX idx_checkups_visit (visit_uuid),
+  INDEX idx_checkups_individual (individual_uuid),
+
+  CONSTRAINT fk_checkups_visit_uuid
+    FOREIGN KEY (visit_uuid) REFERENCES visits(uuid)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_checkups_individual_uuid
+    FOREIGN KEY (individual_uuid) REFERENCES individuals(uuid)
+    ON UPDATE CASCADE ON DELETE RESTRICT
+) ENGINE=InnoDB;
+<<<END patches/checkups_p1_itd012.sql>>>
+
