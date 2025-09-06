@@ -15,6 +15,7 @@ def main():
     ap.add_argument("--root", default="patches", help="SQL格納フォルダ")
     ap.add_argument("--out", default=None, help="出力先（未指定なら ai_out/ 自動命名）")
     ap.add_argument("--filter", default=None, help="ファイル名フィルタの正規表現（例: receipt|checkup）")
+    ap.add_argument("--pr-paths", default="", help="バンドル先頭に # PR_PATHS: 行を付与（例: 'patches/receipt/**, patches/checkup/**'）")
     args = ap.parse_args()
 
     root = pathlib.Path(args.root)
@@ -34,6 +35,8 @@ def main():
 
     with out.open("w", encoding="utf-8", newline="\n") as f:
         f.write("# AI_BUNDLE v1\n")
+        if args.pr_paths.strip():
+            f.write(f"# PR_PATHS: {args.pr_paths.strip()}\n")
         f.write(f"# root={root.as_posix()}\n")
         for (p, *_rest) in parsed_sorted:
             rel = p if p.is_absolute() else pathlib.Path(args.root)/p.name
