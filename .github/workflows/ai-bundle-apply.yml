@@ -1,59 +1,173 @@
-name: AI Bundle — Pack (wip)
+name: AI Bundle — Apply (wip → main PR)
 
 on:
+  push:
+    branches: [ wip ]          # ← wip でのコミットを検知
+    paths:
+      - 'ai_inbox/*.txt'
   workflow_dispatch:
     inputs:
-      filter:
-        description: 'Regex to filter filenames (e.g., "receipt|checkup")'
+      source_branch:
+        description: 'Bundleを読むブランチ'
         required: false
-        default: ''
-      root:
-        description: 'Folder containing .sql files'
+        default: 'wip'
+      target_base:
+        description: '適用先のベースブランチ（PRの宛先）'
         required: false
-        default: 'patches'
+        default: 'main'
+      bundle_path:
+        description: 'ai_inbox/xxx.txt（source_branch上のパス）'
+        required: false
+        default: 'ai_inbox/ai_bundle_fixed.txt'
       pr_paths:
-        description: 'PR対象パス（例: patches/receipt/**, patches/checkup/**）'
+        description: 'PRに含めるパス（カンマ/改行区切り）。未指定時は # PR_PATHS または patches/**'
         required: false
         default: ''
 
 jobs:
-  pack:
+  apply:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Resolve refs
+        id: refs
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "src=${{ github.event.inputs.source_branch }}" >> $GITHUB_OUTPUT
+            echo "base=${{ github.event.inputs.target_base }}"  >> $GITHUB_OUTPUT
+          else
+            echo "src=wip"  >> $GITHUB_OUTPUT
+            echo "base=main" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Checkout base (main)
+        uses: actions/checkout@v4
         with:
-          ref: wip              # ← wip をチェックアウト
+          ref: ${{ steps.refs.outputs.base }}
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with: { python-version: '3.x' }
 
-      - name: Pack bundle from wip
-        id: pack
+      - name: Fetch source branch (wip)
         run: |
-          chmod +x scripts/pack_ai_bundle.py || true
-          ts=$(date +%Y%m%d_%H%M%S)
-          out="ai_out/ai_bundle_${ts}.txt"
-          mkdir -p ai_out
-          cmd="python3 scripts/pack_ai_bundle.py --root '${{ github.event.inputs.root }}' --out '${out}'"
-          if [ -n "${{ github.event.inputs.filter }}" ]; then
-            cmd="$cmd --filter '${{ github.event.inputs.filter }}'"
-          fi
-          if [ -n "${{ github.event.inputs.pr_paths }}" ]; then
-            cmd="$cmd --pr-paths '${{ github.event.inputs.pr_paths }}'"
-          fi
-          eval "$cmd"
-          echo "outfile=${out}" >> $GITHUB_OUTPUT
+          git fetch --no-tags --prune origin ${{ steps.refs.outputs.src }} --depth=50
 
-      - name: Commit to wip (mobile friendly)
+      - name: Determine bundle files
+        id: find
+        shell: bash
         run: |
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add ai_out/
-          git commit -m "AI bundle (wip): add $(basename '${{ steps.pack.outputs.outfile }}')" || echo "no changes"
-          git push origin HEAD:wip
+          mkdir -p .bundles
+          if [ "${{ github.event_name }}" = "push" ]; then
+            BEFORE="${{ github.event.before }}"
+            AFTER="${{ github.sha }}"
+            files=$(git diff --name-only "$BEFORE" "$AFTER" -- 'ai_inbox/*.txt' || true)
+          else
+            files="${{ github.event.inputs.bundle_path }}"
+          fi
+          # export bundles from source branch into workspace
+          list=""
+          for f in $files; do
+            [ -z "$f" ] && continue
+            if git show "origin/${{ steps.refs.outputs.src }}:$f" > ".bundles/$(basename "$f")"; then
+              list="$list .bundles/$(basename "$f")"
+            fi
+          done
+          echo "files=$list" >> $GITHUB_OUTPUT
+          echo "Bundles: $list"
 
-      - name: Upload artifact (optional)
-        uses: actions/upload-artifact@v4
+      - name: Create helper script (apply) if missing
+        run: |
+          if [ ! -f scripts/apply_ai_bundle.py ]; then
+            mkdir -p scripts
+            cat > scripts/apply_ai_bundle.py <<'PY'
+#!/usr/bin/env python3
+import re, sys, pathlib
+START_RE = re.compile(r'^<<<FILE\\s+(.+?)>>>$')
+END_RE   = re.compile(r'^<<<END\\s+(.+?)>>>$')
+def main():
+    if len(sys.argv) < 2:
+        print("usage: apply_ai_bundle.py <bundle.txt>"); sys.exit(1)
+    bundle = pathlib.Path(sys.argv[1])
+    cur = None; buf=[]; wrote=[]
+    with bundle.open(encoding="utf-8") as f:
+        for raw in f:
+            line = raw.rstrip("\\n")
+            m1 = START_RE.match(line); m2 = END_RE.match(line)
+            if m1: cur = pathlib.Path(m1.group(1)); buf=[]
+            elif m2:
+                endp = pathlib.Path(m2.group(1))
+                if cur is None or endp.as_posix()!=cur.as_posix(): raise RuntimeError(f"Marker mismatch: {endp} vs {cur}")
+                cur.parent.mkdir(parents=True, exist_ok=True)
+                cur.write_text("".join(buf), encoding="utf-8")
+                wrote.append(cur.as_posix()); cur=None; buf=[]
+            else:
+                if cur is not None: buf.append(raw)
+    print("updated files:"); [print(" -", p) for p in wrote]
+if __name__ == "__main__": main()
+PY
+          fi
+          chmod +x scripts/apply_ai_bundle.py
+
+      - name: Apply bundle(s) onto base
+        run: |
+          set -e
+          for f in ${{ steps.find.outputs.files }}; do
+            [ -z "$f" ] && continue
+            echo "Applying $f"
+            python3 scripts/apply_ai_bundle.py "$f"
+          done
+
+      - name: Resolve PR paths (input or # PR_PATHS or default)
+        id: prpaths
+        shell: bash
+        run: |
+          paths_input="${{ github.event.inputs.pr_paths }}"
+          if [ -z "$paths_input" ]; then
+            # read first non-empty PR_PATHS from bundles
+            for f in ${{ steps.find.outputs.files }}; do
+              hdr="$(head -n 50 "$f" || true)"
+              line="$(printf "%s\n" "$hdr" | sed -n 's/^# *PR_PATHS:\s*//p' | head -n1)"
+              if [ -n "$line" ]; then paths_input="$line"; break; fi
+            done
+          fi
+          if [ -z "$paths_input" ]; then
+            paths_input="patches/**"
+          fi
+          norm="$(printf "%s\n" "$paths_input" | tr ',' '\n' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | sed '/^$/d')"
+          echo "paths<<EOF" >> $GITHUB_OUTPUT
+          echo "$norm"      >> $GITHUB_OUTPUT
+          echo "EOF"        >> $GITHUB_OUTPUT
+          echo "Resolved PR paths:"; printf "%s\n" "$norm"
+
+      - name: Optional: regenerate README
+        run: |
+          if [ -f scripts/gen_readme_scan.py ]; then
+            python3 scripts/gen_readme_scan.py || true
+          fi
+
+      - name: Create PR to main
+        uses: peter-evans/create-pull-request@v6
+        id: cpr
         with:
-          name: ai_bundle_wip
-          path: ${{ steps.pack.outputs.outfile }}
+          base: ${{ steps.refs.outputs.base }}   # ← main 宛
+          commit-message: "Apply AI bundle(s) from wip"
+          title: "Apply AI bundle(s) (wip → main)"
+          body: |
+            Auto-created by **AI Bundle — Apply (wip → main)**.
+            Source branch: `${{ steps.refs.outputs.src }}`
+            Bundles: ${{ steps.find.outputs.files }}
+            Paths:
+            ${{ steps.prpaths.outputs.paths }}
+          branch: "bot/apply-ai-bundle-${{ github.run_number }}"
+          delete-branch: true
+          labels: ai-bundle, automation
+          add-paths: |
+            ${{ steps.prpaths.outputs.paths }}
+          pathspec_error_no_match: false
+
+      - name: PR URL
+        run: echo "${{ steps.cpr.outputs.pull-request-url }}"
