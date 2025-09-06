@@ -1,45 +1,50 @@
-name: AI Bundle — Pack (branch-local)
+name: ai-bundle-pack (branch-local)
 
 on:
   workflow_dispatch:
     inputs:
       filter:
-        description: 'Regex to filter filenames (e.g., "receipt|checkup")'
+        description: "Regex to filter filenames (e.g., receipt|checkup)"
         required: false
-        default: ''
+        default: ""
       root:
-        description: 'Folder containing .sql files'
+        description: "Folder containing .sql files"
         required: false
-        default: 'patches'
+        default: "patches"
       pr_paths:
-        description: 'Optional: embed "# PR_PATHS:" header into bundle'
+        description: "Optional: embed '# PR_PATHS:' header into bundle"
         required: false
-        default: ''
+        default: ""
 
 jobs:
   pack:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout this branch
+        uses: actions/checkout@v4
         with:
-          ref: ${{ github.ref }}   # 実行時に選んだブランチ
+          ref: ${{ github.ref }}
+          fetch-depth: 0
 
-      - uses: actions/setup-python@v5
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.x'
+          python-version: "3.x"
 
-      - name: Ensure helper (pack) exists
+      - name: Ensure helper exists
         shell: bash
         run: |
-          if [ ! -f scripts/pack_ai_bundle.py ]; then
-            echo "::error::scripts/pack_ai_bundle.py not found"; exit 1
-          fi
+          test -f scripts/pack_ai_bundle.py || { echo "::error::scripts/pack_ai_bundle.py not found"; exit 1; }
+          chmod +x scripts/pack_ai_bundle.py
 
-      - name: Pack bundle on this branch
-        id: pack
+      - id: pack
+        name: Pack bundle
         shell: bash
         run: |
-          chmod +x scripts/pack_ai_bundle.py || true
+          set -e
           ts=$(date +%Y%m%d_%H%M%S)
           out="ai_out/ai_bundle_${ts}.txt"
           mkdir -p ai_out
@@ -50,8 +55,9 @@ jobs:
           if [ -n "${{ github.event.inputs.pr_paths }}" ]; then
             cmd="$cmd --pr-paths '${{ github.event.inputs.pr_paths }}'"
           fi
+          echo "RUN: $cmd"
           eval "$cmd"
-          echo "outfile=${out}" >> $GITHUB_OUTPUT
+          echo "outfile=${out}" >> "$GITHUB_OUTPUT"
 
       - name: Commit bundle to this branch
         shell: bash
