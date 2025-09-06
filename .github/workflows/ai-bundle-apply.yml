@@ -2,7 +2,6 @@ name: AI Bundle — Apply (branch-local PR)
 
 on:
   push:
-    # どのブランチでも、ai_inbox/*.txt をコミットしたら起動
     paths:
       - 'ai_inbox/*.txt'
   workflow_dispatch:
@@ -19,10 +18,11 @@ on:
 jobs:
   apply:
     runs-on: ubuntu-latest
-    permissions: { contents: write, pull-requests: write }
+    permissions:
+      contents: write
+      pull-requests: write
 
     steps:
-      # PRのベースにするのは「このWorkflowが走っているブランチ」
       - name: Checkout base branch (this branch)
         uses: actions/checkout@v4
         with:
@@ -30,7 +30,8 @@ jobs:
           fetch-depth: 0
 
       - uses: actions/setup-python@v5
-        with: { python-version: '3.x' }
+        with:
+          python-version: '3.x'
 
       - name: Gather bundles (push or manual)
         id: bundles
@@ -38,26 +39,28 @@ jobs:
         run: |
           set -e
           mkdir -p .bundles
-
           if [ "${{ github.event_name }}" = "push" ]; then
             BEFORE="${{ github.event.before }}"
             AFTER="${{ github.sha }}"
-            # 必要なオブジェクトを取得
-            git fetch --no-tags --depth=50 origin $BEFORE $AFTER || true
+            git fetch --no-tags --depth=50 origin "$BEFORE" "$AFTER" || true
             files=$(git diff --name-only "$BEFORE" "$AFTER" -- 'ai_inbox/*.txt' || true)
             list=""
             for f in $files; do
               [ -z "$f" ] && continue
-              # 変更後（AFTER）の内容を取り出す
-              if git show "$AFTER:$f" > ".bundles/$(basename "$f")"; then
-                list="$list .bundles/$(basename "$f")"
-              fi
+              git show "$AFTER:$f" > ".bundles/$(basename "$f")" || true
+              [ -f ".bundles/$(basename "$f")" ] && list="$list .bundles/$(basename "$f")"
             done
             echo "files=$list" >> $GITHUB_OUTPUT
-            [ -n "$list" ] || { echo "::error::No ai_inbox/*.txt changes found in push"; exit 1; }
+            if [ -z "$list" ]; then
+              echo "::error::No ai_inbox/*.txt changes found in push"
+              exit 1
+            fi
           else
             path="${{ github.event.inputs.bundle_path }}"
-            [ -f "$path" ] || { echo "::error::Bundle not found: $path"; exit 1; }
+            if [ ! -f "$path" ]; then
+              echo "::error::Bundle not found: $path"
+              exit 1
+            fi
             cp "$path" ".bundles/$(basename "$path")"
             echo "files=.bundles/$(basename "$path")" >> $GITHUB_OUTPUT
           fi
@@ -73,6 +76,7 @@ jobs:
         run: |
           set -e
           for f in ${{ steps.bundles.outputs.files }}; do
+            [ -z "$f" ] && continue
             echo "Applying $f"
             python3 scripts/apply_ai_bundle.py "$f"
           done
@@ -96,7 +100,6 @@ jobs:
           echo "EOF"        >> $GITHUB_OUTPUT
           echo "PR paths:"; printf "%s\n" "$norm"
 
-      # （任意）README再生成：スクリプトがあれば回す。失敗してもPRは作る。
       - name: Optional: regenerate README
         run: |
           if [ -f scripts/gen_readme_scan.py ]; then
@@ -107,9 +110,9 @@ jobs:
         uses: peter-evans/create-pull-request@v6
         id: cpr
         with:
-          base: ${{ github.ref_name }}   # ← トリガー元ブランチがPRの宛先
+          base: ${{ github.ref_name }}
           commit-message: "Apply AI bundle(s)"
-          title: "Apply AI bundle(s) on ${ { github.ref_name } }"
+          title: "Apply AI bundle(s) on ${{ github.ref_name }}"
           body: |
             Auto-created by **AI Bundle — Apply (branch-local)**.
             Bundles: ${{ steps.bundles.outputs.files }}
