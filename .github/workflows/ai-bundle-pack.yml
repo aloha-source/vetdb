@@ -22,13 +22,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # 実行時に選んだブランチ（UIで選べる）。例: refs/heads/wip
-          ref: ${{ github.ref }}
+          ref: ${{ github.ref }}   # 実行時に選んだブランチ
 
       - uses: actions/setup-python@v5
-        with: { python-version: '3.x' }
+        with:
+          python-version: '3.x'
 
       - name: Ensure helper (pack) exists
+        shell: bash
         run: |
           if [ ! -f scripts/pack_ai_bundle.py ]; then
             echo "::error::scripts/pack_ai_bundle.py not found"; exit 1
@@ -36,6 +37,7 @@ jobs:
 
       - name: Pack bundle on this branch
         id: pack
+        shell: bash
         run: |
           chmod +x scripts/pack_ai_bundle.py || true
           ts=$(date +%Y%m%d_%H%M%S)
@@ -52,12 +54,12 @@ jobs:
           echo "outfile=${out}" >> $GITHUB_OUTPUT
 
       - name: Commit bundle to this branch
+        shell: bash
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add ai_out/
           git commit -m "AI bundle: add $(basename '${{ steps.pack.outputs.outfile }}')" || echo "no changes"
-          # 同じブランチへ push
           git push origin HEAD:${{ github.ref_name }}
 
       - name: Upload artifact (optional)
