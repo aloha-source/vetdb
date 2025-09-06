@@ -1,0 +1,492 @@
+# AI_BUNDLE v1
+# root=patches
+<<<FILE patches/0110_checkup_fk_individuals_clinic_uuid.sql>>>
+/* 110_checkup_fk_individuals_clinic_uuid.sql */
+-- @phase: fk
+-- @provides: fk:fk_individuals_clinic_uuid
+-- @requires: table:individuals, table:clinics
+
+ALTER TABLE individuals
+  ADD CONSTRAINT fk_individuals_clinic_uuid FOREIGN KEY (clinic_uuid)  REFERENCES clinics(uuid)    ON UPDATE CASCADE ON DELETE RESTRICT;
+<<<END patches/0110_checkup_fk_individuals_clinic_uuid.sql>>>
+
+<<<FILE patches/210_checkup_fk_visits_clinic_uuid.sql>>>
+/* 210_checkup_fk_visits_clinic_uuid.sql */
+-- @phase: fk
+-- @provides: fk:fk_visits_clinic_uuid
+-- @requires: table:visits, table:clinics
+
+ALTER TABLE visits
+  ADD CONSTRAINT fk_visits_clinic_uuid FOREIGN KEY (clinic_uuid) REFERENCES clinics(uuid) ON UPDATE CASCADE ON DELETE RESTRICT;
+<<<END patches/210_checkup_fk_visits_clinic_uuid.sql>>>
+
+<<<FILE patches/310_checkup_fk_checkups_clinic_uuid.sql>>>
+/* 310_checkup_fk_checkups_clinic_uuid.sql */
+-- @phase: fk
+-- @provides: fk:fk_checkups_clinic_uuid
+-- @requires: table:checkups, table:clinics
+
+ALTER TABLE checkups
+  ADD CONSTRAINT fk_checkups_clinic_uuid   FOREIGN KEY (clinic_uuid)  REFERENCES clinics(uuid)     ON UPDATE CASCADE ON DELETE RESTRICT;
+<<<END patches/310_checkup_fk_checkups_clinic_uuid.sql>>>
+
+<<<FILE patches/692_chart_tr_chd_bu_clinic_sync.sql>>>
+/* 692_chart_tr_chd_bu_clinic_sync.sql */
+-- @phase: trigger
+-- @provides: trigger:tr_chart_header_drafts_bu_clinic_sync
+-- @requires: table:chart_header_drafts, table:farms
+
+DROP TRIGGER IF EXISTS tr_chart_header_drafts_bu_clinic_sync;
+
+DELIMITER $$
+/* 任意：draft 内で farm_uuid を変更した場合に clinic_uuid も再継承して整合させる */
+CREATE TRIGGER tr_chart_header_drafts_bu_clinic_sync
+BEFORE UPDATE ON chart_header_drafts
+FOR EACH ROW
+BEGIN
+  IF NEW.farm_uuid <> OLD.farm_uuid THEN
+    SELECT f.clinic_uuid INTO NEW.clinic_uuid
+      FROM farms f
+     WHERE f.uuid = NEW.farm_uuid
+     LIMIT 1;
+  END IF;
+  /* row_version の更新は既存トリガで実施 */
+END $$
+DELIMITER ;
+<<<END patches/692_chart_tr_chd_bu_clinic_sync.sql>>>
+
+<<<FILE patches/1020_treatment_fk_treatment_master_clinic_uuid.sql>>>
+/* 1020_treatment_fk_treatment_master_clinic_uuid.sql */
+-- @phase: fk
+-- @provides: fk:fk_ttm_clinic_uuid
+-- @requires: table:treatment_master, table:clinics
+-- 原文: treatment_master のみ clinics にFKを付与
+
+ALTER TABLE treatment_master
+  ADD CONSTRAINT fk_ttm_clinic_uuid
+    FOREIGN KEY (clinic_uuid) REFERENCES clinics(uuid)
+    ON UPDATE CASCADE ON DELETE RESTRICT;
+<<<END patches/1020_treatment_fk_treatment_master_clinic_uuid.sql>>>
+
+<<<FILE patches/1400_clinic_create_clinics.sql>>>
+/* 1400_clinic_create_clinics.sql */
+-- @phase: create
+-- @provides: table:clinics
+-- @requires: function:uuid_v7_bin
+-- 方針: 原文のCREATE本体のみ。索引(UNIQUE/KEY)とトリガは別ファイル。
+
+SET NAMES utf8mb4;
+
+/* 再デプロイ安全化（テーブル本体） */
+DROP TABLE IF EXISTS clinics;
+
+CREATE TABLE clinics (
+  id                INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  uuid              BINARY(16) NOT NULL,                 -- ★不変／更新不可（トリガで固定）
+  name              VARCHAR(120) NOT NULL,               -- 例: 〇〇動物病院
+  phone             VARCHAR(50)  NULL,
+  email             VARCHAR(255) NULL,
+
+  /* サブドメイン/独自ドメイン（どちらも任意／NULL重複OK、値が入れば一意） */
+  subdomain         VARCHAR(63)  NULL,
+  custom_domain     VARCHAR(255) NULL,
+
+  postal_code       VARCHAR(16)  NULL,
+  address_line1     VARCHAR(255) NULL,
+  address_line2     VARCHAR(255) NULL,
+
+  notes             TEXT NULL,                           -- 院内メモ（公開しない想定）
+
+  /* 監査・運用列 */
+  created_at        DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at        DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  deleted_at        DATETIME NULL,
+  row_version       BIGINT UNSIGNED NOT NULL DEFAULT 1
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci ROW_FORMAT=DYNAMIC;
+<<<END patches/1400_clinic_create_clinics.sql>>>
+
+<<<FILE patches/1410_clinic_idx_clinics.sql>>>
+/* 1410_clinic_idx_clinics.sql */
+-- @phase: idx
+-- @provides: index:uq_clinics_uuid, index:uq_clinics_subdomain, index:uq_clinics_custom_domain, index:idx_clinics_list
+-- @requires: table:clinics
+-- 原文の UNIQUE/KEY をそのまま移設（名称・列順を維持）
+
+CREATE UNIQUE INDEX uq_clinics_uuid          ON clinics(uuid);
+CREATE UNIQUE INDEX uq_clinics_subdomain     ON clinics(subdomain);
+CREATE UNIQUE INDEX uq_clinics_custom_domain ON clinics(custom_domain);
+CREATE INDEX        idx_clinics_list         ON clinics(deleted_at, updated_at, id);
+<<<END patches/1410_clinic_idx_clinics.sql>>>
+
+<<<FILE patches/1420_clinic_tr_clinics_bi_uuid_v7.sql>>>
+/* 1420_clinic_tr_clinics_bi_uuid_v7.sql */
+-- @phase: trigger
+-- @provides: trigger:tr_clinics_bi_uuid_v7
+-- @requires: table:clinics, function:uuid_v7_bin
+-- 役割: UUID自動採番（未指定時のみ）。原文どおり。
+
+/* 再デプロイ安全化（トリガ個別） */
+DROP TRIGGER IF EXISTS tr_clinics_bi_uuid_v7;
+
+DELIMITER $$
+CREATE TRIGGER tr_clinics_bi_uuid_v7
+BEFORE INSERT ON clinics
+FOR EACH ROW
+BEGIN
+  IF NEW.uuid IS NULL OR NEW.uuid = UNHEX(REPEAT('0',32)) THEN
+    SET NEW.uuid = uuid_v7_bin();
+  END IF;
+END$$
+DELIMITER ;
+<<<END patches/1420_clinic_tr_clinics_bi_uuid_v7.sql>>>
+
+<<<FILE patches/1421_clinic_tr_clinics_bu_rowver.sql>>>
+/* 1421_clinic_tr_clinics_bu_rowver.sql */
+-- @phase: trigger
+-- @provides: trigger:tr_clinics_bu_rowver
+-- @requires: table:clinics
+-- 役割: UUID不変＋row_versionインクリメント。原文どおり。
+
+/* 再デプロイ安全化（トリガ個別） */
+DROP TRIGGER IF EXISTS tr_clinics_bu_rowver;
+
+DELIMITER $$
+CREATE TRIGGER tr_clinics_bu_rowver
+BEFORE UPDATE ON clinics
+FOR EACH ROW
+BEGIN
+  /* UUIDは不変：誤更新による連鎖CASCADE事故を防止 */
+  SET NEW.uuid = OLD.uuid;
+  /* 楽観ロック／差分検知 */
+  SET NEW.row_version = OLD.row_version + 1;
+END$$
+DELIMITER ;
+<<<END patches/1421_clinic_tr_clinics_bu_rowver.sql>>>
+
+<<<FILE patches/1430_clinic_create_clinic_settings.sql>>>
+/* 1430_clinic_create_clinic_settings.sql */
+-- @phase: create
+-- @provides: table:clinic_settings
+-- @requires: table:clinics
+-- 方針: 原文のCREATE本体＋CHECK制約を保持。索引/一意/FKは別ファイル。
+
+/* 再デプロイ安全化（テーブル本体） */
+DROP TABLE IF EXISTS clinic_settings;
+
+CREATE TABLE clinic_settings (
+  id                           INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  clinic_uuid                  BINARY(16) NOT NULL,     -- ↔ clinics.uuid（1院1行）
+  /* 会計系既定値 */
+  yen_per_point                DECIMAL(8,2) NOT NULL DEFAULT 0.00,
+  copay_rate                   DECIMAL(5,2) NOT NULL DEFAULT 0.00,   -- 例: 30.00 (=30%)
+  default_tax_rate             DECIMAL(4,2) NOT NULL DEFAULT 0.00,   -- 例: 10.00 (=10%)
+  price_rounding               ENUM('none','round','ceil','floor') NOT NULL DEFAULT 'round',
+  price_rounding_unit          INT UNSIGNED NOT NULL DEFAULT 1,      -- 1/10/100 など
+
+  /* 帳票/表示 */
+  billing_contact_name         VARCHAR(128) NULL,       -- 請求窓口担当者名（運用表示）
+  invoice_logo_path            VARCHAR(255) NULL,       -- 帳票ロゴ（S3等のパス）
+  receipt_footer_text          VARCHAR(255) NULL,       -- レシート定型フッター
+  invoice_registration_number  VARCHAR(14)  NULL,       -- 例: 'T' + 13桁
+
+  /* 監査・運用列 */
+  created_at                   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at                   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  deleted_at                   DATETIME NULL,
+  row_version                  BIGINT UNSIGNED NOT NULL DEFAULT 1,
+
+  /* 任意: インボイス登録番号の形式検証（対応エンジンのみ有効） */
+  CONSTRAINT chk_clinic_settings_invoice_reg
+    CHECK (invoice_registration_number IS NULL
+           OR invoice_registration_number REGEXP '^T[0-9]{13}$')
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci ROW_FORMAT=DYNAMIC;
+<<<END patches/1430_clinic_create_clinic_settings.sql>>>
+
+<<<FILE patches/1440_clinic_fk_clinic_settings_clinic_uuid.sql>>>
+/* 1440_clinic_fk_clinic_settings_clinic_uuid.sql */
+-- @phase: fk
+-- @provides: fk:fk_clinic_settings_clinic
+-- @requires: table:clinic_settings, table:clinics
+-- 役割: clinics(uuid) への強整合。原文どおり（ON UPDATE CASCADE / ON DELETE RESTRICT）。
+
+ALTER TABLE clinic_settings
+  ADD CONSTRAINT fk_clinic_settings_clinic
+    FOREIGN KEY (clinic_uuid) REFERENCES clinics(uuid)
+    ON UPDATE CASCADE ON DELETE RESTRICT;
+<<<END patches/1440_clinic_fk_clinic_settings_clinic_uuid.sql>>>
+
+<<<FILE patches/1450_clinic_idx_clinic_settings.sql>>>
+/* 1450_clinic_idx_clinic_settings.sql */
+-- @phase: idx
+-- @provides: index:uq_clinic_settings_clinic, index:idx_clinic_settings_list
+-- @requires: table:clinic_settings
+-- 原文の UNIQUE/KEY を移設（名称・列順を維持）
+
+CREATE UNIQUE INDEX uq_clinic_settings_clinic ON clinic_settings(clinic_uuid);
+CREATE INDEX        idx_clinic_settings_list  ON clinic_settings(deleted_at, updated_at, id);
+<<<END patches/1450_clinic_idx_clinic_settings.sql>>>
+
+<<<FILE patches/1460_clinic_tr_clinic_settings_bu_rowver.sql>>>
+/* 1460_clinic_tr_clinic_settings_bu_rowver.sql */
+-- @phase: trigger
+-- @provides: trigger:tr_clinic_settings_bu_rowver
+-- @requires: table:clinic_settings
+-- 役割: row_version の自動インクリメント。原文どおり。
+
+/* 再デプロイ安全化（トリガ個別） */
+DROP TRIGGER IF EXISTS tr_clinic_settings_bu_rowver;
+
+DELIMITER $$
+CREATE TRIGGER tr_clinic_settings_bu_rowver
+BEFORE UPDATE ON clinic_settings
+FOR EACH ROW
+BEGIN
+  SET NEW.row_version = OLD.row_version + 1;
+END$$
+DELIMITER ;
+<<<END patches/1460_clinic_tr_clinic_settings_bu_rowver.sql>>>
+
+<<<FILE patches/1611_appointment_fk_appointments_clinic_uuid.sql>>>
+/* 1611_appointment_fk_appointments_clinic_uuid.sql */
+-- @phase: fk
+-- @provides: fk:fk_appt_clinic_uuid
+-- @requires: table:appointments, table:clinics
+
+ALTER TABLE appointments
+  ADD CONSTRAINT fk_appt_clinic_uuid
+    FOREIGN KEY (clinic_uuid) REFERENCES clinics(uuid)
+    ON UPDATE CASCADE ON DELETE SET NULL;
+<<<END patches/1611_appointment_fk_appointments_clinic_uuid.sql>>>
+
+<<<FILE patches/1630_appointment_create_clinic_google_tokens.sql>>>
+/* 1630_appointment_create_clinic_google_tokens.sql */
+-- @phase: create
+-- @provides: table:clinic_google_tokens
+-- @requires: table:clinics
+
+DROP TABLE IF EXISTS clinic_google_tokens;
+
+CREATE TABLE clinic_google_tokens (
+  id                   INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  clinic_uuid          BINARY(16) NOT NULL,                 -- ↔ clinics.uuid
+  google_email         VARCHAR(255) NOT NULL,
+  access_token_enc     TEXT NOT NULL,                       -- 暗号化済み
+  refresh_token_enc    TEXT NOT NULL,                       -- 暗号化済み
+  token_type           VARCHAR(32) NULL,
+  scopes               TEXT NULL,
+  expires_at           DATETIME NULL,
+  revoked_at           DATETIME NULL,
+
+  row_version          BIGINT UNSIGNED NOT NULL DEFAULT 1,
+  created_at           DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at           DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  COLLATE=utf8mb4_unicode_ci ROW_FORMAT=DYNAMIC;
+<<<END patches/1630_appointment_create_clinic_google_tokens.sql>>>
+
+<<<FILE patches/1640_appointment_idx_clinic_google_tokens.sql>>>
+/* 1640_appointment_idx_clinic_google_tokens.sql */
+-- @phase: idx
+-- @provides: index:uq_clinic_token, index:idx_tokens_list, index:idx_google_email
+-- @requires: table:clinic_google_tokens
+
+CREATE UNIQUE INDEX uq_clinic_token ON clinic_google_tokens (clinic_uuid);
+CREATE INDEX idx_tokens_list       ON clinic_google_tokens (updated_at, id);
+CREATE INDEX idx_google_email      ON clinic_google_tokens (google_email);
+<<<END patches/1640_appointment_idx_clinic_google_tokens.sql>>>
+
+<<<FILE patches/1650_appointment_fk_clinic_google_tokens_clinic.sql>>>
+/* 1650_appointment_fk_clinic_google_tokens_clinic.sql */
+-- @phase: fk
+-- @provides: fk:fk_clinic_token_clinic
+-- @requires: table:clinic_google_tokens, table:clinics
+
+ALTER TABLE clinic_google_tokens
+  ADD CONSTRAINT fk_clinic_token_clinic
+    FOREIGN KEY (clinic_uuid) REFERENCES clinics(uuid)
+    ON UPDATE CASCADE ON DELETE CASCADE;
+<<<END patches/1650_appointment_fk_clinic_google_tokens_clinic.sql>>>
+
+<<<FILE patches/1660_appointment_tr_clinic_google_tokens_bu_rowver.sql>>>
+/* 1660_appointment_tr_clinic_google_tokens_bu_rowver.sql */
+-- @phase: trigger
+-- @provides: trigger:tr_clinic_google_tokens_bu_rowver
+-- @requires: table:clinic_google_tokens
+
+DROP TRIGGER IF EXISTS tr_clinic_google_tokens_bu_rowver;
+
+DELIMITER $$
+CREATE TRIGGER tr_clinic_google_tokens_bu_rowver
+BEFORE UPDATE ON clinic_google_tokens
+FOR EACH ROW
+BEGIN
+  SET NEW.row_version = OLD.row_version + 1;
+END $$
+DELIMITER ;
+<<<END patches/1660_appointment_tr_clinic_google_tokens_bu_rowver.sql>>>
+
+<<<FILE patches/1670_appointment_create_clinic_calendar_settings.sql>>>
+/* 1670_appointment_create_clinic_calendar_settings.sql */
+-- @phase: create
+-- @provides: table:clinic_calendar_settings
+-- @requires: table:clinics, table:vet_users
+
+DROP TABLE IF EXISTS clinic_calendar_settings;
+
+CREATE TABLE clinic_calendar_settings (
+  id                          INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  clinic_uuid                 BINARY(16) NOT NULL,           -- ↔ clinics.uuid
+  calendar_id                 VARCHAR(255) NOT NULL,         -- '...@group.calendar.google.com'
+  calendar_summary            VARCHAR(255) NULL,
+  sync_owner_vet_user_uuid    BINARY(16) NULL,               -- ↔ vet_users.uuid（SET NULL）
+
+  row_version                 BIGINT UNSIGNED NOT NULL DEFAULT 1,
+  created_at                  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at                  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  COLLATE=utf8mb4_unicode_ci ROW_FORMAT=DYNAMIC;
+<<<END patches/1670_appointment_create_clinic_calendar_settings.sql>>>
+
+<<<FILE patches/1680_appointment_idx_clinic_calendar_settings.sql>>>
+/* 1680_appointment_idx_clinic_calendar_settings.sql */
+-- @phase: idx
+-- @provides: index:uq_clinic_calendar, index:idx_calendar_id, index:idx_clinic_calendar_list
+-- @requires: table:clinic_calendar_settings
+
+CREATE UNIQUE INDEX uq_clinic_calendar    ON clinic_calendar_settings (clinic_uuid);
+CREATE INDEX        idx_calendar_id       ON clinic_calendar_settings (calendar_id);
+CREATE INDEX        idx_clinic_calendar_list ON clinic_calendar_settings (updated_at, id);
+<<<END patches/1680_appointment_idx_clinic_calendar_settings.sql>>>
+
+<<<FILE patches/1690_appointment_fk_clinic_calendar_settings_clinic.sql>>>
+/* 1690_appointment_fk_clinic_calendar_settings_clinic.sql */
+-- @phase: fk
+-- @provides: fk:fk_clinic_calendar_clinic
+-- @requires: table:clinic_calendar_settings, table:clinics
+
+ALTER TABLE clinic_calendar_settings
+  ADD CONSTRAINT fk_clinic_calendar_clinic
+    FOREIGN KEY (clinic_uuid) REFERENCES clinics(uuid)
+    ON UPDATE CASCADE ON DELETE CASCADE;
+<<<END patches/1690_appointment_fk_clinic_calendar_settings_clinic.sql>>>
+
+<<<FILE patches/1700_appointment_fk_clinic_calendar_settings_sync_owner.sql>>>
+/* 1700_appointment_fk_clinic_calendar_settings_sync_owner.sql */
+-- @phase: fk
+-- @provides: fk:fk_clinic_calendar_sync_owner
+-- @requires: table:clinic_calendar_settings, table:vet_users
+
+ALTER TABLE clinic_calendar_settings
+  ADD CONSTRAINT fk_clinic_calendar_sync_owner
+    FOREIGN KEY (sync_owner_vet_user_uuid) REFERENCES vet_users(uuid)
+    ON UPDATE CASCADE ON DELETE SET NULL;
+<<<END patches/1700_appointment_fk_clinic_calendar_settings_sync_owner.sql>>>
+
+<<<FILE patches/1710_appointment_tr_clinic_calendar_settings_bu_rowver.sql>>>
+/* 1710_appointment_tr_clinic_calendar_settings_bu_rowver.sql */
+-- @phase: trigger
+-- @provides: trigger:tr_clinic_calendar_settings_bu_rowver
+-- @requires: table:clinic_calendar_settings
+
+DROP TRIGGER IF EXISTS tr_clinic_calendar_settings_bu_rowver;
+
+DELIMITER $$
+CREATE TRIGGER tr_clinic_calendar_settings_bu_rowver
+BEFORE UPDATE ON clinic_calendar_settings
+FOR EACH ROW
+BEGIN
+  SET NEW.row_version = OLD.row_version + 1;
+END $$
+DELIMITER ;
+<<<END patches/1710_appointment_tr_clinic_calendar_settings_bu_rowver.sql>>>
+
+<<<FILE patches/2009_receipt_tr_receipt_header_drafts_bi_clinic_inherit.sql>>>
+/* 2009_receipt_tr_receipt_header_drafts_bi_clinic_inherit.sql */
+-- @phase: trigger
+-- @feature: receipt
+-- @provides: trigger:tr_receipt_header_drafts_bi_clinic_inherit
+-- @requires: table:receipt_header_drafts, table:farms
+-- 備考: 原文の命名・ロジックをそのまま分離（BIで farm→clinic 継承）
+
+DROP TRIGGER IF EXISTS tr_receipt_header_drafts_bi_clinic_inherit;
+DELIMITER $$
+CREATE TRIGGER tr_receipt_header_drafts_bi_clinic_inherit
+BEFORE INSERT ON receipt_header_drafts
+FOR EACH ROW
+BEGIN
+  IF NEW.clinic_uuid IS NULL AND NEW.farm_uuid IS NOT NULL THEN
+    SELECT f.clinic_uuid INTO NEW.clinic_uuid
+      FROM farms f WHERE f.uuid = NEW.farm_uuid LIMIT 1;
+  END IF;
+END $$
+DELIMITER ;
+<<<END patches/2009_receipt_tr_receipt_header_drafts_bi_clinic_inherit.sql>>>
+
+<<<FILE patches/2017_receipt_tr_receipt_headers_bi_clinic_inherit.sql>>>
+/* 2017_receipt_tr_receipt_headers_bi_clinic_inherit.sql */
+-- @phase: trigger
+-- @feature: receipt
+-- @provides: trigger:tr_receipt_headers_bi_clinic_inherit
+-- @requires: table:receipt_headers, table:farms
+-- 備考: 原文「tr_receipt_headers_bi_clinic_inherit」をそのまま分離
+
+DROP TRIGGER IF EXISTS tr_receipt_headers_bi_clinic_inherit;
+DELIMITER $$
+CREATE TRIGGER tr_receipt_headers_bi_clinic_inherit
+BEFORE INSERT ON receipt_headers
+FOR EACH ROW
+BEGIN
+  IF NEW.clinic_uuid IS NULL AND NEW.farm_uuid IS NOT NULL THEN
+    SELECT f.clinic_uuid INTO NEW.clinic_uuid
+      FROM farms f WHERE f.uuid = NEW.farm_uuid LIMIT 1;
+  END IF;
+END $$
+DELIMITER ;
+<<<END patches/2017_receipt_tr_receipt_headers_bi_clinic_inherit.sql>>>
+
+<<<FILE patches/2027_receipt_tr_receipt_checkups_bi_clinic_inherit.sql>>>
+/* 2027_receipt_tr_receipt_checkups_bi_clinic_inherit.sql */
+-- @phase: trigger
+-- @feature: receipt
+-- @provides: trigger:tr_receipt_checkups_bi_clinic_inherit
+-- @requires: table:receipt_checkups, table:receipt_headers
+
+DROP TRIGGER IF EXISTS tr_receipt_checkups_bi_clinic_inherit;
+DELIMITER $$
+CREATE TRIGGER tr_receipt_checkups_bi_clinic_inherit
+BEFORE INSERT ON receipt_checkups
+FOR EACH ROW
+BEGIN
+  IF NEW.clinic_uuid IS NULL THEN
+    SELECT h.clinic_uuid INTO NEW.clinic_uuid
+      FROM receipt_headers h WHERE h.uuid = NEW.receipt_header_uuid LIMIT 1;
+  END IF;
+END $$
+DELIMITER ;
+<<<END patches/2027_receipt_tr_receipt_checkups_bi_clinic_inherit.sql>>>
+
+<<<FILE patches/2036_receipt_tr_receipt_items_bi_clinic_inherit.sql>>>
+/* 2036_receipt_tr_receipt_items_bi_clinic_inherit.sql */
+-- @phase: trigger
+-- @feature: receipt
+-- @provides: trigger:tr_receipt_items_bi_clinic_inherit
+-- @requires: table:receipt_items, table:receipt_checkups
+
+DROP TRIGGER IF EXISTS tr_receipt_items_bi_clinic_inherit;
+DELIMITER $$
+CREATE TRIGGER tr_receipt_items_bi_clinic_inherit
+BEFORE INSERT ON receipt_items
+FOR EACH ROW
+BEGIN
+  DECLARE v_item_clinic BINARY(16);
+
+  /* 親CKPから clinic_uuid を固定継承 */
+  IF NEW.clinic_uuid IS NULL THEN
+    SELECT c.clinic_uuid INTO v_item_clinic
+      FROM receipt_checkups c WHERE c.uuid = NEW.receipt_checkup_uuid LIMIT 1;
+    SET NEW.clinic_uuid = v_item_clinic;
+  END IF;
+END $$
+DELIMITER ;
+<<<END patches/2036_receipt_tr_receipt_items_bi_clinic_inherit.sql>>>
+
