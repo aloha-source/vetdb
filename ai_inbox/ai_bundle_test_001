@@ -1,0 +1,40 @@
+# AI_BUNDLE v1
+# root=patches
+<<<FILE patches/1400_clinic_create_clinics.sql>>>
+/* 1400_clinic_create_clinics.sql */
+-- @phase: create
+-- @provides: table:clinics
+-- @requires: function:uuid_v7_bin
+-- 方針: 原文のCREATE本体のみ。索引(UNIQUE/KEY)とトリガは別ファイル。
+
+SET NAMES utf8mb4;
+
+/* 再デプロイ安全化（テーブル本体） */
+DROP TABLE IF EXISTS clinics;
+
+-- TEST: clinicsテーブルに対するテストコメント（AIバンドルで挿入）
+
+CREATE TABLE clinics (
+  id                INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  uuid              BINARY(16) NOT NULL,                 -- ★不変／更新不可（トリガで固定）
+  name              VARCHAR(120) NOT NULL,               -- 例: 〇〇動物病院
+  phone             VARCHAR(50)  NULL,
+  email             VARCHAR(255) NULL,
+
+  /* サブドメイン/独自ドメイン（どちらも任意／NULL重複OK、値が入れば一意） */
+  subdomain         VARCHAR(63)  NULL,
+  custom_domain     VARCHAR(255) NULL,
+
+  postal_code       VARCHAR(16)  NULL,
+  address_line1     VARCHAR(255) NULL,
+  address_line2     VARCHAR(255) NULL,
+
+  notes             TEXT NULL,                           -- 院内メモ（公開しない想定）
+
+  /* 監査・運用列 */
+  created_at        DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at        DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  deleted_at        DATETIME NULL,
+  row_version       BIGINT UNSIGNED NOT NULL DEFAULT 1
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci ROW_FORMAT=DYNAMIC;
+<<<END patches/1400_clinic_create_clinics.sql>>>
