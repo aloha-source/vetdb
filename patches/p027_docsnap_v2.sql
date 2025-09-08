@@ -1,9 +1,10 @@
 /* =========================================================
-  p027 — docsnap v2 インストーラ（4SP版, 詳細コメント付き, リネーム適用）
+  p027 — docsnap v2 インストーラ（4SP版, 詳細コメント付き, MariaDB 10.5 対応）
   ---------------------------------------------------------
   変更点:
-    - 設定テーブル名: docsnap_targets_v2 → docsnap_targets
-    - SP名: sp_docsnap_insert_one2 → sp_docsnap_insert_one
+    - 設定テーブル名: docsnap_targets
+    - SP名: sp_docsnap_insert_one
+    - MariaDB 10.5 の DECLARE 順序制約に対応（SP#2 で DECLARE 群の後に SET を配置）
   機能概要:
     - docsnap（文書スナップショット）を階層的に発行する最小構成のDDL一式
     - 「親→子」の辿り方は設定テーブル docsnap_targets に宣言し、
@@ -17,8 +18,6 @@
     6) SP#4: sp_docsnap_issue_bfs         … BFSで階層を丸ごとスナップ
   前提:
     - uuid_v7_bin() 関数が存在（新規スナップ行のUUID生成）
-  注意:
-    - 本DDLは最小構成です。インデックス追加や循環検出などの強化は別途検討してください。
 ========================================================= */
 
 
@@ -138,6 +137,7 @@ DELIMITER ;
   4) SP#2: sp_docsnap_ensure_columns
   目的: snap_<元表> に <元表>_<元列> という prefix列を不足分だけ ADD
   方針: 型は元の COLUMN_TYPE を踏襲。NULL許容で追加（制約は持ち込まない）。
+  注記: MariaDB 10.5 の規則に従い、DECLARE 群の後に SET を配置（構文エラー回避）。
 ========================================================= */
 DELIMITER $$
 
@@ -151,9 +151,7 @@ BEGIN
   DECLARE v_coltype TEXT;
   DECLARE done INT DEFAULT 0;
 
-  SET v_snap_table = CONCAT('snap_', p_src_table);
-
-  -- 元テーブルの全列を物理順に走査
+  -- すべての DECLARE（変数/カーソル/ハンドラ）を先頭に配置
   DECLARE cur CURSOR FOR
     SELECT COLUMN_NAME, COLUMN_TYPE
       FROM information_schema.COLUMNS
@@ -161,8 +159,10 @@ BEGIN
        AND TABLE_NAME = p_src_table
      ORDER BY ORDINAL_POSITION;
 
-  -- カーソル取り切り時の終了ハンドラ
   DECLARE CONTINUE HANDLER FOR NOT FOUND SET done = 1;
+
+  -- ← ここから実行文（MariaDB 10.5 構文順守）
+  SET v_snap_table = CONCAT('snap_', p_src_table);
 
   OPEN cur;
   read_loop: LOOP
