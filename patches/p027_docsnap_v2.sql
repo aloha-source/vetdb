@@ -1,16 +1,19 @@
 /* =========================================================
-  p027 — docsnap v2 インストーラ（tmp2 / 4SP版, 詳細コメント付き）
+  p027 — docsnap v2 インストーラ（4SP版, 詳細コメント付き, リネーム適用）
   ---------------------------------------------------------
+  変更点:
+    - 設定テーブル名: docsnap_targets_v2 → docsnap_targets
+    - SP名: sp_docsnap_insert_one2 → sp_docsnap_insert_one
   機能概要:
     - docsnap（文書スナップショット）を階層的に発行する最小構成のDDL一式
-    - 「親→子」の辿り方は設定テーブル docsnap_targets_v2 に宣言し、
+    - 「親→子」の辿り方は設定テーブル docsnap_targets に宣言し、
       幅優先探索（BFS）でルートから全階層をスナップ
   構成:
-    1) 親子宣言テーブル docsnap_targets_v2（BFS経路の定義）
+    1) 親子宣言テーブル docsnap_targets（BFS経路の定義）
     2) 親子宣言シード（chart / receipt / 文書4種）
     3) SP#1: sp_docsnap_ensure_table      … snap_<元表> を必要なら CREATE
     4) SP#2: sp_docsnap_ensure_columns    … snap_<元表> に prefix 列を必要なら ADD
-    5) SP#3: sp_docsnap_insert_one2       … 1行スナップ（SP#1,#2 を内部呼び出し）
+    5) SP#3: sp_docsnap_insert_one        … 1行スナップ（SP#1,#2 を内部呼び出し）
     6) SP#4: sp_docsnap_issue_bfs         … BFSで階層を丸ごとスナップ
   前提:
     - uuid_v7_bin() 関数が存在（新規スナップ行のUUID生成）
@@ -27,8 +30,8 @@
   - 有効: is_active（宣言のON/OFF切替）
 ================================ */
 
-DROP TABLE IF EXISTS docsnap_targets_v2;
-CREATE TABLE docsnap_targets_v2 (
+DROP TABLE IF EXISTS docsnap_targets;
+CREATE TABLE docsnap_targets (
   id             INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,  -- 設定行ID
   parent_table   VARCHAR(64) NOT NULL,                     -- 親テーブル名
   parent_pk_col  VARCHAR(64) NOT NULL DEFAULT 'uuid',      -- 親の主キー列名（既定 'uuid'）
@@ -51,25 +54,25 @@ CREATE TABLE docsnap_targets_v2 (
 ===================================== */
 
 -- chart: chart_headers → chart_checkups
-INSERT INTO docsnap_targets_v2
+INSERT INTO docsnap_targets
 (parent_table,   parent_pk_col, child_table,      child_fk_col,           order_by_sql,                          is_active)
 VALUES
 ('chart_headers','uuid',        'chart_checkups', 'chart_uuid',           'seq_no ASC, id ASC',                 1);
 
 -- chart: chart_checkups → chart_items
-INSERT INTO docsnap_targets_v2
+INSERT INTO docsnap_targets
 (parent_table,    parent_pk_col, child_table,   child_fk_col,         order_by_sql,                              is_active)
 VALUES
 ('chart_checkups','uuid',        'chart_items', 'chart_checkup_uuid', 'within_checkup_line_no ASC, id ASC',     1);
 
 -- receipt: receipt_headers → receipt_items
-INSERT INTO docsnap_targets_v2
+INSERT INTO docsnap_targets
 (parent_table,      parent_pk_col, child_table,     child_fk_col,            order_by_sql,  is_active)
 VALUES
 ('receipt_headers', 'uuid',        'receipt_items', 'receipt_header_uuid',   'id ASC',      1);
 
 -- 文書4種: headers → lines（ビュー/表名・FK名は環境に合わせて調整可）
-INSERT INTO docsnap_targets_v2
+INSERT INTO docsnap_targets
 (parent_table,                 parent_pk_col, child_table,                    child_fk_col,  order_by_sql,             is_active)
 VALUES
 ('v_doc_pregnancy_headers',    'uuid',        'v_doc_pregnancy_lines',        'header_uuid', 'line_no ASC, id ASC',    1),
@@ -192,7 +195,7 @@ DELIMITER ;
 
 
 /* =========================================================
-  5) SP#3: sp_docsnap_insert_one2
+  5) SP#3: sp_docsnap_insert_one
   目的: 元テーブルの単一行を、snap_<元表> に「メタ列＋prefix列」でコピー
   流れ:
     (1) ensure（SP#1, #2）で保存先のテーブル・列を用意
@@ -202,8 +205,8 @@ DELIMITER ;
 ========================================================= */
 DELIMITER $$
 
-DROP PROCEDURE IF EXISTS sp_docsnap_insert_one2 $$
-CREATE PROCEDURE sp_docsnap_insert_one2(
+DROP PROCEDURE IF EXISTS sp_docsnap_insert_one $$
+CREATE PROCEDURE sp_docsnap_insert_one(
   IN  p_src_table           VARCHAR(64),   -- 元テーブル名
   IN  p_src_pk              VARCHAR(64),   -- 元PK列名（通常 'uuid'）
   IN  p_src_uuid            BINARY(16),    -- 対象の元UUID
@@ -284,7 +287,7 @@ DELIMITER ;
 
 /* =========================================================
   6) SP#4: sp_docsnap_issue_bfs
-  目的: ルート（テーブル・UUID）から docsnap_targets_v2 に従って BFS で階層スナップ
+  目的: ルート（テーブル・UUID）から docsnap_targets に従って BFS で階層スナップ
   方式: 一時テーブルをキューとして使用（深さごとに処理）
   注意: 循環経路や重複投入を前提にしていません（宣言側で回避）
 ========================================================= */
@@ -363,7 +366,7 @@ BEGIN
        LIMIT 1;
 
       -- 1行スナップ（保存先の ensure はSP内で実施）
-      CALL sp_docsnap_insert_one2(
+      CALL sp_docsnap_insert_one(
         v_tbl, 'uuid', v_src_uuid,
         v_parent_snap_uuid, v_parent_tbl, v_parent_src_uuid,
         v_snap_uuid
@@ -378,7 +381,7 @@ BEGIN
 
         DECLARE cur CURSOR FOR
           SELECT child_table, child_fk_col, IFNULL(order_by_sql,'')
-            FROM docsnap_targets_v2
+            FROM docsnap_targets
            WHERE is_active=1 AND parent_table=v_tbl;
 
         DECLARE CONTINUE HANDLER FOR NOT FOUND SET done = 1;
