@@ -1,3 +1,6 @@
+/* ===========================
+   p029 — header_settings（DATETIME(6)版）
+   =========================== */
 SET NAMES utf8mb4;
 
 -- ── 再デプロイ安全化 ─────────────────────────────────────────────
@@ -49,9 +52,9 @@ CREATE TABLE header_settings (
   -- ▼ 運用/監査
   is_active             TINYINT(1)     NOT NULL DEFAULT 1      COMMENT '1=有効/0=無効',
   row_version           BIGINT UNSIGNED NOT NULL DEFAULT 1     COMMENT '楽観ロック',
-  created_at            DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at            DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  deleted_at            DATETIME        NULL,
+  created_at            DATETIME(6)     NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at            DATETIME(6)     NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+  deleted_at            DATETIME(6)     NULL,
 
   -- ▼ 1ヘッダ=1設定（論理削除後の復活も同一キーで扱う）
   UNIQUE KEY uq_header_settings_one (header_table, header_uuid),
